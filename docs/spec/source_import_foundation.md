@@ -82,7 +82,7 @@ ID 算法版本为 `source-import-id-v1`。每个 ID 的哈希输入是本节定
 | `Equipment.equipment_id` | `equipment` | `case_id`, `equipment_type`, `source_id`, `source_record_ref` |
 | `Terminal.terminal_id` | `terminal` | `equipment_id`, `terminal_no` |
 | `TransformerWinding.winding_id` | `winding` | `equipment_id`, `winding_no` |
-| `SimulationProfile.simulation_profile_id` | `simulation-profile` | `case_id`, `source_sim_config` |
+| `SimulationProfile.simulation_profile_id` | `simulation-profile` | `case_id`, 字面常量 `"source_sim_config"` |
 | `OperationalSeries.series_id` | `operational-series` | `case_id`, `target_ref.entity_type`, `target_ref.entity_id`, `source_record_ref`, `source_field` |
 | `FieldProvenance.provenance_id` | `field-provenance` | `target_ref.entity_type`, `target_ref.entity_id`, `field_path`, `origin`, `source_record_ref`, `source_field`, `source_mapping_id`, `source_mapping_version` |
 | `DataQualityIssue.issue_id` | `quality-issue` | `dataset_id`, `case_id` 或 null, `target_ref.entity_type` 或 null, `target_ref.entity_id` 或 null, `field_path` 或 null, `code`, `source_record_ref` 或 null, `occurrence_key` |
