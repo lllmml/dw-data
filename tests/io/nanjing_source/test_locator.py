@@ -1,6 +1,7 @@
 import pytest
 
 from grid_case_generator.io.nanjing_source.locator import (
+    SourceRecordRef,
     UnsafeZipMemberPath,
     source_record_ref,
     validate_zip_member_path,
@@ -27,9 +28,24 @@ def test_parent_like_but_non_parent_segment_is_allowed() -> None:
     assert validate_zip_member_path("data/case..name/01_Station.csv") is None
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        "zip-member:data/%e6%95%b0.csv#data-row=1",
+        "zip-member:data/%41.csv#data-row=1",
+        "zip-member:data/../file.csv#data-row=1",
+        "zip-member:data/file.csv#data-row=0",
+    ],
+)
+def test_source_record_ref_rejects_noncanonical_values(value: str) -> None:
+    with pytest.raises(ValueError):
+        SourceRecordRef(value)
+
+
 def test_locator_uses_exact_rfc3986_percent_encoding() -> None:
     locator = source_record_ref("数据/馈线 space/%#?/01_Station.csv", data_row=2)
 
+    assert isinstance(locator, SourceRecordRef)
     assert locator == (
         "zip-member:%E6%95%B0%E6%8D%AE/"
         "%E9%A6%88%E7%BA%BF%20space/%25%23%3F/01_Station.csv#data-row=2"

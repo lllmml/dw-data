@@ -4,8 +4,13 @@ import csv
 from io import TextIOWrapper
 from zipfile import BadZipFile, ZipFile
 
-from .locator import source_record_ref, validate_zip_member_path
-from .models import IntakeDiagnostic, IntakeDiagnosticCode, RawCsvFile, RawCsvRow
+from .locator import SourceRecordRef, source_record_ref, validate_zip_member_path
+from .models import (
+    IntakeDiagnostic,
+    IntakeDiagnosticCode,
+    RawCsvRecord,
+    RawSourceFile,
+)
 from .schema import SourceFileSchema
 
 
@@ -15,7 +20,7 @@ def _diagnostic(
     message: str,
     source_case_key: str,
     member_path: str,
-    row_ref: str | None = None,
+    row_ref: SourceRecordRef | None = None,
     expected_header: tuple[str, ...] | None = None,
     observed_header: tuple[str, ...] | None = None,
 ) -> IntakeDiagnostic:
@@ -36,11 +41,11 @@ def read_raw_csv_member(
     source_case_key: str,
     member_path: str,
     file_schema: SourceFileSchema,
-) -> RawCsvFile:
+) -> RawSourceFile:
     """Read one expected member without mapping or normalizing any field."""
 
     validate_zip_member_path(member_path)
-    rows: list[RawCsvRow] = []
+    records: list[RawCsvRecord] = []
     diagnostics: list[IntakeDiagnostic] = []
     header: tuple[str, ...] | None = None
 
@@ -66,12 +71,12 @@ def read_raw_csv_member(
                             observed_header=header,
                         )
                     )
-                    return RawCsvFile(
+                    return RawSourceFile(
                         source_case_key=source_case_key,
-                        file_type=file_schema.file_type,
+                        source_file_type=file_schema.file_type,
                         member_path=member_path,
                         header=header,
-                        rows=(),
+                        records=(),
                         diagnostics=tuple(diagnostics),
                     )
 
@@ -107,8 +112,11 @@ def read_raw_csv_member(
                         if len(values) == len(header)
                         else None
                     )
-                    rows.append(
-                        RawCsvRow(
+                    records.append(
+                        RawCsvRecord(
+                            source_case_key=source_case_key,
+                            source_file_type=file_schema.file_type,
+                            header=header,
                             data_row=data_row,
                             source_record_ref=row_ref,
                             values=values,
@@ -145,16 +153,16 @@ def read_raw_csv_member(
                 member_path=member_path,
             )
         )
-        return RawCsvFile(
+        return RawSourceFile(
             source_case_key=source_case_key,
-            file_type=file_schema.file_type,
+            source_file_type=file_schema.file_type,
             member_path=member_path,
             header=header,
-            rows=tuple(rows),
+            records=tuple(records),
             diagnostics=tuple(diagnostics),
         )
 
-    if not rows and not diagnostics:
+    if not records and not diagnostics:
         diagnostics.append(
             _diagnostic(
                 code=IntakeDiagnosticCode.SOURCE_FILE_NO_DATA_ROWS,
@@ -164,11 +172,11 @@ def read_raw_csv_member(
             )
         )
 
-    return RawCsvFile(
+    return RawSourceFile(
         source_case_key=source_case_key,
-        file_type=file_schema.file_type,
+        source_file_type=file_schema.file_type,
         member_path=member_path,
         header=header,
-        rows=tuple(rows),
+        records=tuple(records),
         diagnostics=tuple(diagnostics),
     )

@@ -1,14 +1,15 @@
 """Read-only Nanjing ZIP inventory."""
 
+from hashlib import sha256
 from pathlib import Path
 from zipfile import ZipFile
 
 from .locator import validate_zip_member_path
 from .models import (
-    ArchiveInventory,
     IntakeDiagnostic,
     IntakeDiagnosticCode,
     SourceCaseInventory,
+    SourceDatasetInventory,
 )
 from .schema import NANJING_SOURCE_SCHEMA, SourceFileType, SourceSchemaRegistry
 
@@ -21,10 +22,14 @@ def inventory_archive(
     archive_path: str | Path,
     *,
     registry: SourceSchemaRegistry = NANJING_SOURCE_SCHEMA,
-) -> ArchiveInventory:
+) -> SourceDatasetInventory:
     """Inventory a ZIP without extracting or changing it."""
 
     source_path = Path(archive_path)
+    digest = sha256()
+    with source_path.open("rb") as source_stream:
+        for block in iter(lambda: source_stream.read(1024 * 1024), b""):
+            digest.update(block)
     with ZipFile(source_path, mode="r") as archive:
         infos = archive.infolist()
 
@@ -77,8 +82,9 @@ def inventory_archive(
             )
         )
 
-    return ArchiveInventory(
-        archive_path=source_path,
+    return SourceDatasetInventory(
+        source_uri=str(source_path),
+        source_checksum=f"sha256:{digest.hexdigest()}",
         member_count=len(infos),
         csv_member_count=csv_member_count,
         cases=tuple(cases),

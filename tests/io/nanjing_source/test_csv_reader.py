@@ -43,8 +43,11 @@ def test_reader_is_bom_safe_and_preserves_every_field_as_exact_string() -> None:
 
     assert result.header == STATION_SCHEMA.header
     assert result.diagnostics == ()
-    assert len(result.rows) == 1
-    row = result.rows[0]
+    assert len(result.records) == 1
+    row = result.records[0]
+    assert row.source_case_key == CASE_KEY
+    assert row.source_file_type is SourceFileType.STATION
+    assert row.header == STATION_SCHEMA.header
     assert row.data_row == 1
     assert row.values == (
         "0012345678901234567",
@@ -74,11 +77,11 @@ def test_embedded_newline_is_one_logical_record_for_locator_numbering() -> None:
             file_schema=STATION_SCHEMA,
         )
 
-    assert [row.data_row for row in result.rows] == [1, 2]
-    assert result.rows[0].values[2] == "line one\nline two"
-    assert result.rows[1].source_record_ref.endswith("#data-row=2")
-    assert "%20" in result.rows[0].source_record_ref
-    assert "%25%23%3F" in result.rows[0].source_record_ref
+    assert [row.data_row for row in result.records] == [1, 2]
+    assert result.records[0].values[2] == "line one\nline two"
+    assert result.records[1].source_record_ref.endswith("#data-row=2")
+    assert "%20" in result.records[0].source_record_ref
+    assert "%25%23%3F" in result.records[0].source_record_ref
 
 
 def test_header_mismatch_is_a_structured_file_diagnostic() -> None:
@@ -90,7 +93,7 @@ def test_header_mismatch_is_a_structured_file_diagnostic() -> None:
             file_schema=STATION_SCHEMA,
         )
 
-    assert result.rows == ()
+    assert result.records == ()
     assert len(result.diagnostics) == 1
     diagnostic = result.diagnostics[0]
     assert diagnostic.code is IntakeDiagnosticCode.SOURCE_HEADER_MISMATCH
@@ -109,7 +112,7 @@ def test_zero_byte_file_is_reported_as_header_mismatch() -> None:
         )
 
     assert result.header == ()
-    assert result.rows == ()
+    assert result.records == ()
     assert result.diagnostics[0].code is IntakeDiagnosticCode.SOURCE_HEADER_MISMATCH
 
 
@@ -123,7 +126,7 @@ def test_only_header_is_reported_without_creating_a_raw_row() -> None:
             file_schema=STATION_SCHEMA,
         )
 
-    assert result.rows == ()
+    assert result.records == ()
     assert result.diagnostics[0].code is IntakeDiagnosticCode.SOURCE_FILE_NO_DATA_ROWS
 
 
@@ -141,7 +144,7 @@ def test_wrong_field_count_preserves_raw_values_and_reports_logical_row() -> Non
             file_schema=STATION_SCHEMA,
         )
 
-    row = result.rows[0]
+    row = result.records[0]
     assert row.values == ("001", "T", "missing-columns")
     assert row.fields is None
     diagnostic = result.diagnostics[0]
@@ -164,7 +167,7 @@ def test_invalid_csv_quoting_is_a_structured_raw_row_diagnostic() -> None:
             file_schema=STATION_SCHEMA,
         )
 
-    assert result.rows == ()
+    assert result.records == ()
     assert result.diagnostics[0].code is IntakeDiagnosticCode.SOURCE_ROW_MALFORMED
     assert result.diagnostics[0].source_record_ref is not None
     assert result.diagnostics[0].source_record_ref.endswith("#data-row=1")
@@ -179,6 +182,6 @@ def test_invalid_utf8_is_a_structured_file_read_failure() -> None:
             file_schema=STATION_SCHEMA,
         )
 
-    assert result.rows == ()
+    assert result.records == ()
     assert result.diagnostics[0].code is IntakeDiagnosticCode.SOURCE_FILE_READ_FAILED
     assert result.diagnostics[0].source_record_ref is None

@@ -1,4 +1,5 @@
 from pathlib import Path
+from hashlib import sha256
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
@@ -31,6 +32,9 @@ def test_inventory_discovers_case_from_exact_expected_file_positions(
 
     inventory = inventory_archive(archive_path)
 
+    assert inventory.source_uri == str(archive_path)
+    expected_checksum = sha256(archive_path.read_bytes()).hexdigest()
+    assert inventory.source_checksum == f"sha256:{expected_checksum}"
     assert inventory.csv_member_count == 12
     assert inventory.member_count == 12
     assert len(inventory.cases) == 1

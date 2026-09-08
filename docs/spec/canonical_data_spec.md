@@ -575,6 +575,7 @@ Operator Adapter 目前只是扩展点。Canonical Model 不为尚未提供需�
 |---|---|
 | `docs/spec/canonical_data_spec.md` | 稳定领域合同、质量和 provenance 语义、依赖边界 |
 | `docs/spec/source_import_foundation.md` | Source Import 实现基线、确定性 ID、错误分类和质量代码 |
+| `docs/spec/source_intake_contract.md` | Source Intake 输出与 Canonical Mapper 输入之间的稳定接口 |
 | `docs/spec/nanjing_source_audit.md` | 南京源数据统计、分布、异常和数据事实 |
 | `docs/spec/nanjing_mapping_spec.md` | 南京 12 类 CSV 到 Canonical Model 的 Source Adapter 映射 |
 | `docs/decisions/open_questions.md` | 需甲方或领域专家确认的问题、当前证据和安全行为 |

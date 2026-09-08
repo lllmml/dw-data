@@ -28,6 +28,7 @@ def test_real_nanjing_archive_inventory_is_complete_and_read_only() -> None:
     assert before_digest == EXPECTED_SHA256
     inventory = inventory_archive(ARCHIVE_PATH)
 
+    assert inventory.source_checksum == f"sha256:{EXPECTED_SHA256}"
     assert len(inventory.cases) == 5_159
     assert inventory.csv_member_count == 61_908
     assert all(case.is_complete for case in inventory.cases)

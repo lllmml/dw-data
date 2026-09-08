@@ -2,14 +2,28 @@
 
 from .archive import inventory_archive
 from .csv_reader import read_raw_csv_member
-from .locator import UnsafeZipMemberPath, source_record_ref, validate_zip_member_path
+from .locator import (
+    SourceRecordRef,
+    UnsafeZipMemberPath,
+    source_record_ref,
+    validate_zip_member_path,
+)
+from .mapping import (
+    CANONICAL_SPEC_VERSION,
+    RecordMappingOutcome,
+    UnmappedSourceRecord,
+    map_dataset,
+    map_feeder,
+    map_grid_case,
+    map_station,
+)
 from .models import (
-    ArchiveInventory,
     IntakeDiagnostic,
     IntakeDiagnosticCode,
-    RawCsvFile,
-    RawCsvRow,
+    RawCsvRecord,
+    RawSourceFile,
     SourceCaseInventory,
+    SourceDatasetInventory,
 )
 from .schema import (
     NANJING_SOURCE_SCHEMA,
@@ -19,19 +33,27 @@ from .schema import (
 )
 
 __all__ = [
-    "ArchiveInventory",
     "IntakeDiagnostic",
     "IntakeDiagnosticCode",
     "NANJING_SOURCE_SCHEMA",
-    "RawCsvFile",
-    "RawCsvRow",
+    "RecordMappingOutcome",
+    "RawCsvRecord",
+    "RawSourceFile",
     "SourceCaseInventory",
+    "SourceDatasetInventory",
     "SourceFileSchema",
     "SourceFileType",
     "SourceSchemaRegistry",
+    "SourceRecordRef",
+    "UnmappedSourceRecord",
     "UnsafeZipMemberPath",
     "inventory_archive",
+    "map_dataset",
+    "map_feeder",
+    "map_grid_case",
+    "map_station",
     "read_raw_csv_member",
     "source_record_ref",
     "validate_zip_member_path",
+    "CANONICAL_SPEC_VERSION",
 ]
