@@ -527,9 +527,18 @@ Canonical 有效性只检查本规范内部合同，例如：
 
 可以按记录或算例汇总 `MISSING`、`EXACT`、`AMBIGUOUS`、`UNRESOLVED` 等状态。该汇总只报告源引用解析程度，不得命名为通用的 `Topology Resolved`，也不得隐含已经形成母线—支路图、网络连通、无孤岛、满足辐射性或可供某消费者使用。
 
-### 7.5 消费者就绪性
+### 7.5 四层数据状态与消费者就绪性
 
-本规范不定义全局 `Simulation Ready`。就绪性必须是带消费者和场景限定的判断，例如“某 OpenDSS Adapter 版本对某 Snapshot 场景是否就绪”。
+数据处理结果必须区分以下四个独立结论：
+
+| 状态 | 判定边界 |
+|---|---|
+| Import Complete | Source Adapter 是否完整处理并 account for 输入；按 7.1 节判定 |
+| Canonical Valid | Canonical 内部结构和约束是否满足；按 7.2 节判定 |
+| OpenDSS Ready | 指定版本 OpenDSS Adapter 针对指定场景所需的拓扑、参数和模型是否具备 |
+| Operator Ready | 指定算子及其版本的输入合同是否满足 |
+
+这些状态不得合并为单一等级，也不得互相自动推导。本规范不定义全局 `Simulation Ready`。OpenDSS Ready 和 Operator Ready 必须是带消费者、版本及适用场景限定的判断，例如“某 OpenDSS Adapter 版本对某 Snapshot 场景是否就绪”。
 
 Snapshot、QSTS、OpenDSS 对相位、线路参数、绕组参数、源等值、连接投影和时间序列的要求，应写入后续独立的 OpenDSS Adapter/readiness 规范。该规范在要求确认前不由本文代拟。
 
@@ -568,6 +577,7 @@ Operator Adapter 目前只是扩展点。Canonical Model 不为尚未提供需�
 | `docs/spec/source_import_foundation.md` | Source Import 实现基线、确定性 ID、错误分类和质量代码 |
 | `docs/spec/nanjing_source_audit.md` | 南京源数据统计、分布、异常和数据事实 |
 | `docs/spec/nanjing_mapping_spec.md` | 南京 12 类 CSV 到 Canonical Model 的 Source Adapter 映射 |
+| `docs/decisions/open_questions.md` | 需甲方或领域专家确认的问题、当前证据和安全行为 |
 
 当前不创建 generation rules 或 operator-specific 规范。OpenDSS Adapter/readiness 规范也应等目标版本、连接投影和场景输入要求确认后再创建。
 

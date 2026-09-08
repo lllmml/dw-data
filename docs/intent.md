@@ -4,13 +4,22 @@
 
 随着智能电网相关算法的发展，负荷预测、光伏预测、故障检测、状态评估、潮流计算、优化调度等智能电网算子需要大量结构完整、格式统一、可计算的配电网数据作为测试和验证基础。
 
-目前，甲方提供的南京市配电网公开数据主要包含电网拓扑结构信息，包括：
+目前，甲方提供的南京市配电网公开数据以 12 类 CSV source file 组织，包括：
 
-- 变电站
-- 母线
-- 开关设备
-- 变压器
-- 馈线等拓扑信息
+- Station
+- Bus
+- Switch
+- Disconnector
+- Feeder
+- EarthingSwitch
+- AccessPoint
+- Line
+- Transformer
+- Load
+- DER
+- SimConfig
+
+这些文件共同构成源数据范围，但“存在某类文件”不等于“该类文件已有可用数据”。例如当前南京数据中的 Load 和 DER 文件只有表头，SimConfig 也只代表源文件中的配置声明，不能据此认定负荷、分布式能源或真实仿真参数已经具备。
 
 但由于公开数据限制，缺少部分用于算例计算和智能算法测试的数据，包括：
 
@@ -20,7 +29,7 @@
 - 时序运行数据
 - 仿真所需运行参数
 
-因此，需要构建一个自动化的数据生成与验证框架，在保持原始配电网拓扑结构的基础上，对缺失数据进行规则化生成，形成可用于智能电网算子测试的标准化配电网算例。
+因此，需要构建一个自动化的数据生成与验证框架：忠实保留原始数据事实，同时在独立层次中对缺失数据进行规则化生成，形成可用于仿真和智能电网算子测试的、版本化且可追溯的派生算例。保护原始数据不表示禁止生成派生模型。
 
 
 ---
@@ -42,7 +51,7 @@
 
 生成的数据应满足：
 
-1. 保持原始拓扑结构一致；
+1. 原始数据事实不可修改，任何连接投影或拓扑派生均不得回写源数据；
 2. 补充计算所需的电气参数；
 3. 生成合理的负荷和分布式能源运行数据；
 4. 支撑后续智能电网算子的开发和测试。
@@ -59,11 +68,15 @@
 - Station
 - Bus
 - Switch
-- Transformer
+- Disconnector
+- Feeder
+- EarthingSwitch
+- AccessPoint
 - Line
+- Transformer
 - Load
 - DER
-- Simulation Configuration
+- SimConfig
 
 并转换为统一内部数据模型。
 
@@ -149,27 +162,28 @@
 # 5. Design Principles
 
 
-## 5.1 保持拓扑不变
+## 5.1 Source Facts 与 Derived Model 分离
 
-原始拓扑数据作为可信来源。
+Source Facts 是原始南京 CSV 对数据的陈述：
 
-生成过程：
+- `data/raw/` 中的源制品不可修改或覆盖；
+- 原始字段、ID、引用和记录定位必须保留；
+- 不允许静默修复、覆盖、合并或删除源记录；
+- 原始引用只表达源数据写了什么，不自动等同于已确认的电气连接。
 
-允许：
+Derived Model 是为后续消费者形成的独立结果：
 
-- 增加缺失运行数据；
-- 补充设备参数；
-- 生成算例所需数据。
+- 可以为 OpenDSS、QSTS 或具体算子生成拓扑投影、补全参数和时序数据；
+- 派生结果必须写入与 source data 分离的位置，不得覆盖或冒充 Source Facts；
+- 每项生成、推导、修复或人工修改必须记录 provenance，包括适用的规则、版本、配置和随机种子；
+- 未确认的业务语义不得作为派生规则的隐式默认值。
 
-不主动修改：
+因此，“保持原始拓扑结构一致”和“不主动修改连接关系”约束的是 Source Facts；它们不禁止在依据明确时生成版本化、可追溯的派生拓扑。
 
-- 原始节点关系；
-- 原始设备连接关系。
+## 5.2 数据与算法解耦
 
 
 ---
-
-## 5.2 数据与算法解耦
 
 建立统一数据模型：
 
@@ -201,6 +215,25 @@ Operator Adapter / OpenDSS Adapter
 避免不可解释的随机生成。
 
 
+## 5.4 数据状态分层
+
+下列四个状态是独立结论，不能互相替代或从前一状态自动推导：
+
+| 状态 | 含义 | 不代表 |
+|---|---|---|
+| Import Complete | Source Adapter 是否完整处理并 account for 输入合同中的文件、记录和非空值 | Canonical 数据有效、可仿真或可供算子使用 |
+| Canonical Valid | Canonical 数据是否满足内部结构、类型、必需字段、引用完整性和 provenance 约束 | 具备仿真参数、连接投影或消费者要求 |
+| OpenDSS Ready | 指定版本的 OpenDSS Adapter 针对指定场景是否具备所需拓扑、参数和模型 | 其他仿真场景或算子也已就绪 |
+| Operator Ready | 指定算子及其版本的输入合同是否满足 | OpenDSS 或其他算子已就绪 |
+
+同一数据集可以 Import Complete 但 Canonical-invalid，也可以 Canonical Valid 但尚未 OpenDSS Ready 或 Operator Ready。OpenDSS Ready 与 Operator Ready 必须分别由具体消费者合同判定。
+
+
+## 5.5 GridCase 边界
+
+对当前南京 Source Adapter，一个 source case directory 形成一个独立 `GridCase`，目录相对路径作为 `source_case_key` 精确保留。`GridCase` 不以 Feeder 记录是否存在为建立条件：即使目录中的 Feeder 文件只有表头或无法建立 Feeder，也必须保留该 case，并通过 quality issue 表达缺失或歧义，不得删除该 case 或从其他目录补配 Feeder。
+
+
 ---
 
 # 6. Success Criteria
@@ -208,7 +241,7 @@ Operator Adapter / OpenDSS Adapter
 
 ## 数据生成
 
-- 支持南京全部馈线批量处理；
+- 支持南京全部 source case directory 批量处理，包括缺失 Feeder 记录的 case；
 - 自动生成完整算例数据；
 - 输出甲方要求的数据格式。
 

@@ -5,7 +5,8 @@
 ## 项目边界
 
 - 以 `docs/intent.md` 为需求依据。
-- 保持甲方原始配电网拓扑，不在 `data/raw/` 中修改或覆盖源文件。
+- 忠实保留甲方 source facts，不在 `data/raw/` 中修改或覆盖源文件，不静默修复原始字段、ID 或引用。
+- 允许按已确认规则生成版本化、可追溯的派生拓扑、参数和时序数据；派生结果不得覆盖或冒充 source data。
 - 在规范获得确认前，不臆造线路、负荷、分布式能源或仿真参数。
 
 ## 目录职责
@@ -32,4 +33,6 @@
 
 ## 当前状态
 
-仓库目前只有工程骨架。除非任务明确要求，不实现数据补全、参数生成或仿真算法。
+已完成：Canonical foundation、Source import foundation，以及南京 ZIP inventory、12 类 CSV schema registry、raw CSV 无损读取和 `source_record_ref` 追踪。
+
+未完成：CSV → Canonical mapper、topology projection、data completion、OpenDSS generation、QSTS 和 operator adapters。除非任务明确要求且相应规范已确认，不实现这些能力。

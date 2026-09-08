@@ -100,11 +100,14 @@ ID 算法版本为 `source-import-id-v1`。每个 ID 的哈希输入是本节定
 
 ## 6. Import status 与错误恢复边界
 
-### 6.1 三个独立结论
+### 6.1 四个独立结论
 
 - `Dataset.import_status` 只按 `canonical_data_spec.md` 7.1 节判定 Source Adapter 是否完整处理并 account for 输入。
 - `Canonical Valid` 只检查 Canonical 内部合同。一次 `COMPLETE` 导入可以产生部分 Canonical-invalid 记录或质量事件。
-- 消费者 readiness 不属于 Source Import，不得从 `import_status`、issue severity 或引用解析率推导。
+- `OpenDSS Ready` 只由指定版本 OpenDSS Adapter 针对指定场景的合同判定，检查所需拓扑、参数和模型是否具备。
+- `Operator Ready` 只由指定算子及其版本的输入合同判定。
+
+四个结论不得混用或顺次自动推导。OpenDSS Ready 与 Operator Ready 不属于 Source Import，不得从 `import_status`、Canonical Valid、issue severity 或引用解析率推导。
 
 ### 6.2 错误分类
 
@@ -160,7 +163,7 @@ Source Import MVP 使用目录化 JSON/JSONL：
 - `manifest.json`：格式版本、Canonical/mapping 版本、源 URI/checksum、导入时间、`import_status`、记录数和输出文件 checksum；
 - `records/<record-type>.jsonl`：按 Canonical 记录类型分文件，每行一条记录；
 - `field_provenance.jsonl` 和 `quality_issues.jsonl`：分别保存来源与质量事件；
-- `import_report.json`：Import Complete 检查、Canonical Valid 检查和汇总统计。三类结论必须分开字段表达。
+- `import_report.json`：Import Complete 检查、Canonical Valid 检查和汇总统计。两项检查必须分开字段表达；若未来引用 OpenDSS Ready 或 Operator Ready 结果，也必须以消费者和版本限定的独立字段表达。
 
 Identifier 和 enum 序列化为 JSON string，`Decimal` 序列化为不丢失精度的十进制 JSON string，缺失值为 JSON `null`。不得输出 NaN、Infinity 或二进制浮点近似值。
 
