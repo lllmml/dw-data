@@ -5,7 +5,7 @@
 | 项目 | 值 |
 |---|---|
 | 状态 | Draft，待业务确认 |
-| 规范版本 | `0.2.0` |
+| 规范版本 | `0.3.0` |
 | 需求依据 | `docs/intent.md` |
 | 适用范围 | 与数据源、存储格式和下游消费者无关的稳定领域契约 |
 
@@ -92,6 +92,8 @@ flowchart LR
 - 源 ID 可以跨算例或跨实体类型重复。源实体的逻辑键至少包含 `case_id + entity_type + source_id`。
 - 同一逻辑键对应多条源记录时，不得覆盖或静默去重。导入层必须用 `source_record_ref` 区分记录。
 - 内容完全相同和内容冲突的重复记录必须分别标记；冲突在治理确认前不得合并。
+- 由单条源记录直接建立、并以 `source_id` 表达源身份的顶层实体必须具有 `identity_status`。当前范围仅为 Station、Feeder、Bus 和 Equipment。
+- Terminal、TransformerWinding 以及 Line、SwitchingDevice、Transformer、AccessPoint、Load、DER 等复用 Equipment 身份的子记录不单独定义 `identity_status`；其可追踪性由所属顶层实体和 `source_record_ref` 提供。
 - Adapter 可生成目标系统安全名称，但不得替换 Canonical ID 或源 ID。
 
 ### 4.3 空值和未知状态
@@ -112,6 +114,7 @@ flowchart LR
 | 数据质量 | `VALID`、`SUSPECT`、`INVALID`、`TIME_UNKNOWN` |
 | 质量事件严重度 | `INFO`、`WARNING`、`ERROR` |
 | 身份状态 | `UNIQUE`、`DUPLICATE_IDENTICAL`、`DUPLICATE_CONFLICT` |
+| Source Adapter 导入状态 | `COMPLETE`、`INCOMPLETE`、`FAILED` |
 | 时间基准 | `ABSOLUTE`、`RELATIVE` |
 
 ## 5. 源引用与电气连接
@@ -206,6 +209,7 @@ Canonical `GridCase` 不包含全局 `simulation_readiness`。源引用解析状
 | Station | `station_id` | `CanonicalId` | R | 算例内唯一 |
 | Station | `case_id` | `CanonicalId` | R | 所属算例 |
 | Station | `source_id` | `SourceId` | C | 源实体存在时必需 |
+| Station | `identity_status` | enum | R | 源身份唯一、重复相同或重复冲突 |
 | Station | `station_type` | string/enum | N | 保留未知源值 |
 | Station | `name` | string | N | 站点名称 |
 | Station | `nominal_voltage_kv` | `Decimal` | N | kV |
@@ -215,11 +219,13 @@ Canonical `GridCase` 不包含全局 `simulation_readiness`。源引用解析状
 | Feeder | `feeder_id` | `CanonicalId` | R | 算例内唯一 |
 | Feeder | `case_id` | `CanonicalId` | R | 所属算例 |
 | Feeder | `source_id` | `SourceId` | C | 源实体存在时必需 |
+| Feeder | `identity_status` | enum | R | 源身份唯一、重复相同或重复冲突 |
 | Feeder | `name` | string | N | 不作为主键 |
 | Feeder | `source_bus_source_ref` | `SourceReference` | N | 不自动声明电气连接 |
 | Bus | `bus_id` | `CanonicalId` | R | 算例内唯一 |
 | Bus | `case_id` | `CanonicalId` | R | 所属算例 |
 | Bus | `source_id` | `SourceId` | C | 允许前导零和后缀 |
+| Bus | `identity_status` | enum | R | 源身份唯一、重复相同或重复冲突 |
 | Bus | `name` | string | N | 母线名称 |
 | Bus | `base_voltage_kv` | `Decimal` | N | kV |
 | Bus | `phases` | `PhaseSet` | N | 未知不得默认 |
@@ -467,6 +473,14 @@ AccessPoint 只是潜在接入位置，不自动等同于 Load、DER 或已确�
 
 `Import Complete` 是相对于某一 Source Adapter 输入合同的导入结果，不是固定为南京 12 类 CSV，也不代表数据可仿真。
 
+`Dataset.import_status` 的取值和判定如下：
+
+| 状态 | 精确判定 |
+|---|---|
+| `COMPLETE` | Adapter 已走完导入流程；输入合同声明的每个文件位置都已被识别为存在、缺失、空或 schema 异常等明确状态；每条可定位源记录都已转换为 Canonical 记录，或作为未映射源记录完整保留并附有质量事件；每个非空源值均已映射、原文保留或以质量事件记录。 |
+| `INCOMPLETE` | 已能建立 Dataset 身份并产生可识别的部分结果，但存在已知文件、源记录或非空值未被 account for，例如读取中断、无法继续的解码失败、资源中断或内部错误后只留下部分输出。部分输出必须显式标记为不完整。 |
+| `FAILED` | 无法建立可信的 Dataset 身份或输入清单，或失败发生在任何可信 Canonical/报告结果产生之前。该次运行不得将中间文件声明为导入结果。 |
+
 至少要求：
 
 - Adapter 声明的输入文件和 schema 已完成识别或形成明确质量事件；
@@ -475,6 +489,8 @@ AccessPoint 只是潜在接入位置，不自动等同于 Load、DER 或已确�
 - 未知枚举、重复身份和转换失败未被静默丢弃。
 
 Import Complete 允许 Canonical 字段为空、源引用未解析、连接未确认或存在冲突。
+
+`DataQualityIssue` 的存在及其 `severity` 不直接决定 `import_status`。只要每个输入都已按上述合同被 account for，即使存在 `ERROR` 质量事件，导入仍可为 `COMPLETE`。`Canonical Valid` 由 7.2 节独立判定；消费者 readiness 由具体 Adapter 另行判定。
 
 ### 7.2 Canonical Valid
 
@@ -549,6 +565,7 @@ Operator Adapter 目前只是扩展点。Canonical Model 不为尚未提供需�
 | 文档 | 单一职责 |
 |---|---|
 | `docs/spec/canonical_data_spec.md` | 稳定领域合同、质量和 provenance 语义、依赖边界 |
+| `docs/spec/source_import_foundation.md` | Source Import 实现基线、确定性 ID、错误分类和质量代码 |
 | `docs/spec/nanjing_source_audit.md` | 南京源数据统计、分布、异常和数据事实 |
 | `docs/spec/nanjing_mapping_spec.md` | 南京 12 类 CSV 到 Canonical Model 的 Source Adapter 映射 |
 

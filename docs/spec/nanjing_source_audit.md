@@ -8,7 +8,7 @@
 | 审计版本 | `0.1.0` |
 | 分析对象 | `data/raw/南京数据.zip` |
 | SHA-256 | `7ae1e246e5ac8073053d280cd64e66cdc491d5303dc2c15aa74f823be202de25` |
-| Canonical 合同 | `docs/spec/canonical_data_spec.md` `0.2.0` |
+| Canonical 合同 | `docs/spec/canonical_data_spec.md` `0.3.0` |
 
 本文只记录南京数据集的统计、分布、异常和待确认事实，不定义稳定领域模型或字段映射。源制品只读，审计结论不得用于覆盖 `data/raw/`。
 
