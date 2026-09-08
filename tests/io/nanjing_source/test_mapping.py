@@ -3,6 +3,7 @@ from decimal import Decimal
 from grid_case_generator.io.nanjing_source.locator import source_record_ref
 from grid_case_generator.io.nanjing_source.mapping import (
     CANONICAL_SPEC_VERSION,
+    map_bus,
     map_dataset,
     map_feeder,
     map_grid_case,
@@ -27,6 +28,12 @@ from grid_case_generator.models.types import (
     Severity,
     SourceId,
     SourceReferenceStatus,
+)
+from grid_case_generator.validation.identity import (
+    SourceEntityType,
+    SourceIdentityClassification,
+    SourceIdentityRecord,
+    classify_source_identities,
 )
 from grid_case_generator.validation.quality import ImportErrorCategory
 
@@ -71,6 +78,23 @@ def _raw_record(
         values=values,
         fields=tuple(zip(schema.header, values, strict=True)),
     )
+
+
+def _bus_identity_record(raw: RawCsvRecord) -> SourceIdentityRecord:
+    assert raw.source_file_type is SourceFileType.BUS
+    assert raw.fields is not None
+    fields = dict(raw.fields)
+    return SourceIdentityRecord(
+        case_id=CASE_ID,
+        source_entity_type=SourceEntityType.BUS,
+        source_id=SourceId(fields["Bus_ID"]),
+        source_record_ref=raw.source_record_ref,
+        decoded_fields=raw.fields,
+    )
+
+
+def _classification(raw: RawCsvRecord) -> SourceIdentityClassification:
+    return classify_source_identities((_bus_identity_record(raw),))[0]
 
 
 def test_dataset_mapper_uses_intake_checksum_and_explicit_import_metadata() -> None:
@@ -167,6 +191,84 @@ def test_station_mapper_preserves_source_identity_trace_and_nulls() -> None:
     assert station.longitude is None
     assert station.latitude is None
     assert station.coordinate_crs is None
+
+
+def test_bus_mapper_maps_unique_classified_record_without_resolving_reference() -> None:
+    raw = _raw_record(
+        SourceFileType.BUS,
+        ("0000000000000000001_bs", " bus name ", "10.50", "", "0007", "TRUE"),
+    )
+    classification = _classification(raw)
+
+    outcome = map_bus(raw, classification)
+
+    assert outcome.record is not None
+    bus = outcome.record
+    assert bus.bus_id == SourceImportIdFactory.bus_id(
+        CASE_ID, SourceId("0000000000000000001_bs"), raw.source_record_ref
+    )
+    assert bus.case_id == CASE_ID
+    assert bus.source_id == SourceId("0000000000000000001_bs")
+    assert bus.identity_status is IdentityStatus.UNIQUE
+    assert bus.name == " bus name "
+    assert bus.base_voltage_kv == Decimal("10.50")
+    assert bus.phases is None
+    assert bus.station_source_ref is not None
+    assert bus.station_source_ref.raw_ref == SourceId("0007")
+    assert bus.station_source_ref.resolved_source_ref is None
+    assert (
+        bus.station_source_ref.resolution_status
+        is SourceReferenceStatus.UNRESOLVED
+    )
+    assert bus.is_source is True
+    assert bus.record_origin is RecordOrigin.SOURCE
+    assert bus.source_record_ref == raw.source_record_ref
+    assert bus.source_mapping_id == "nanjing_csv"
+    assert bus.source_mapping_version == "0.2.0"
+    assert outcome.issues == ()
+    assert outcome.unmapped_record is None
+    assert outcome.error_category is None
+
+
+def test_bus_mapper_keeps_every_duplicate_source_record() -> None:
+    values = ("bus-1", "name", "10", "", "", "false")
+    first_raw = _raw_record(SourceFileType.BUS, values, data_row=1)
+    second_raw = _raw_record(SourceFileType.BUS, values, data_row=2)
+    raw_by_ref = {
+        raw.source_record_ref: raw for raw in (first_raw, second_raw)
+    }
+    classifications = classify_source_identities(
+        (_bus_identity_record(first_raw), _bus_identity_record(second_raw))
+    )
+
+    buses = tuple(
+        map_bus(raw_by_ref[item.record.source_record_ref], item).record
+        for item in classifications
+    )
+
+    assert len(buses) == 2
+    assert all(bus is not None for bus in buses)
+    assert {bus.source_record_ref for bus in buses if bus is not None} == {
+        first_raw.source_record_ref,
+        second_raw.source_record_ref,
+    }
+    assert {bus.identity_status for bus in buses if bus is not None} == {
+        IdentityStatus.DUPLICATE_IDENTICAL
+    }
+    assert len({bus.bus_id for bus in buses if bus is not None}) == 2
+
+
+def test_bus_mapper_output_is_deterministic() -> None:
+    raw = _raw_record(
+        SourceFileType.BUS,
+        ("001_bs", "name", "10.00", "", "", "False"),
+    )
+    classification = _classification(raw)
+
+    first = map_bus(raw, classification)
+    second = map_bus(raw, classification)
+
+    assert first == second
 
 
 def test_station_optional_decimal_failure_is_recoverable() -> None:

@@ -7,6 +7,7 @@ from typing import Generic, TypeVar
 from grid_case_generator.models.identifiers import SourceImportIdFactory
 from grid_case_generator.models.quality import QualityIssueCode
 from grid_case_generator.models.records import (
+    Bus,
     DataQualityIssue,
     Dataset,
     Feeder,
@@ -27,6 +28,10 @@ from grid_case_generator.models.types import (
 from grid_case_generator.validation.quality import (
     ImportErrorCategory,
     default_severity_for_issue,
+)
+from grid_case_generator.validation.identity import (
+    SourceEntityType,
+    SourceIdentityClassification,
 )
 
 from .locator import SourceRecordRef
@@ -390,6 +395,87 @@ def map_feeder(
     )
     return RecordMappingOutcome(
         record=feeder,
+        issues=(),
+        unmapped_record=None,
+        error_category=None,
+    )
+
+
+def _bus_boolean(raw_value: str) -> bool | None:
+    if raw_value == "":
+        return None
+    normalized = raw_value.lower()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    raise ValueError("Bus_IsSource issue handling is outside this Slice")
+
+
+def _bus_base_voltage(raw_value: str) -> Decimal | None:
+    if raw_value == "":
+        return None
+    try:
+        value = Decimal(raw_value)
+    except InvalidOperation as error:
+        raise ValueError(
+            "Bus_BaseKV issue handling is outside this Slice"
+        ) from error
+    if not value.is_finite():
+        raise ValueError("Bus_BaseKV issue handling is outside this Slice")
+    return value
+
+
+def map_bus(
+    record: RawCsvRecord,
+    classification: SourceIdentityClassification,
+) -> RecordMappingOutcome[Bus]:
+    """Map one already-classified Bus source record without resolving references."""
+
+    fields = _validated_fields(record, expected_file_type=SourceFileType.BUS)
+    if fields is None:
+        raise ValueError("a classified Bus record must have aligned decoded fields")
+
+    identity = classification.record
+    if identity.source_entity_type is not SourceEntityType.BUS:
+        raise ValueError("classification must describe a BUS source entity")
+    if identity.source_record_ref != record.source_record_ref:
+        raise ValueError("classification must describe the same source record")
+    if identity.decoded_fields != record.fields:
+        raise ValueError("classification decoded fields must match the raw record")
+    if fields["Bus_ID"] == "" or identity.source_id != fields["Bus_ID"]:
+        raise ValueError("classification source_id must match non-empty Bus_ID")
+    if fields["Bus_Phase"] != "":
+        raise ValueError("non-empty Bus_Phase mapping is not yet confirmed")
+
+    source_id = identity.source_id
+    bus_id = SourceImportIdFactory.bus_id(
+        identity.case_id, source_id, record.source_record_ref
+    )
+    raw_station_ref = fields["Bus_Station_ID"]
+    station_source_ref = SourceReference(
+        raw_ref=SourceId(raw_station_ref) if raw_station_ref != "" else None,
+        resolved_source_ref=None,
+        resolution_status=(
+            SourceReferenceStatus.UNRESOLVED
+            if raw_station_ref != ""
+            else SourceReferenceStatus.MISSING
+        ),
+    )
+    bus = Bus(
+        **_source_trace(record.source_record_ref),
+        bus_id=bus_id,
+        case_id=identity.case_id,
+        source_id=source_id,
+        identity_status=classification.identity_status,
+        name=_nullable_text(fields["Bus_Name"]),
+        base_voltage_kv=_bus_base_voltage(fields["Bus_BaseKV"]),
+        phases=None,
+        station_source_ref=station_source_ref,
+        is_source=_bus_boolean(fields["Bus_IsSource"]),
+    )
+    return RecordMappingOutcome(
+        record=bus,
         issues=(),
         unmapped_record=None,
         error_category=None,
