@@ -1,12 +1,6 @@
-from grid_case_generator.models.identifiers import SourceImportIdFactory
-from grid_case_generator.models.quality import QualityIssueCode
 from grid_case_generator.models.types import (
     CanonicalId,
-    EntityRef,
-    EquipmentType,
-    Identifier,
     IdentityStatus,
-    Severity,
     SourceId,
 )
 from grid_case_generator.validation.identity import (
@@ -16,9 +10,8 @@ from grid_case_generator.validation.identity import (
 )
 
 
-DATASET_ID = SourceImportIdFactory.dataset_id("a" * 64)
-CASE_ID = SourceImportIdFactory.case_id(DATASET_ID, "data/case")
-OTHER_CASE_ID = SourceImportIdFactory.case_id(DATASET_ID, "data/other-case")
+CASE_ID = CanonicalId("case-1")
+OTHER_CASE_ID = CanonicalId("case-2")
 
 
 def _record(
@@ -40,15 +33,10 @@ def _record(
 
 
 def _classify(*records: SourceIdentityRecord):
-    return classify_source_identities(
-        records,
-        dataset_id=DATASET_ID,
-        source_mapping_id="nanjing_csv",
-        source_mapping_version="0.2.0",
-    )
+    return classify_source_identities(records)
 
 
-def test_identical_duplicates_keep_every_record_and_create_warning_issues() -> None:
+def test_identical_duplicates_keep_every_record() -> None:
     fields = (("Station_ID", "001"), ("Station_Name", "原名"))
     first = _record(source_id="001", data_row=1, decoded_fields=fields)
     second = _record(source_id="001", data_row=2, decoded_fields=fields)
@@ -60,14 +48,7 @@ def test_identical_duplicates_keep_every_record_and_create_warning_issues() -> N
     assert {result.identity_status for result in results} == {
         IdentityStatus.DUPLICATE_IDENTICAL
     }
-    assert all(result.issue is not None for result in results)
-    assert {result.issue.code for result in results if result.issue} == {
-        QualityIssueCode.SOURCE_ID_DUPLICATE_IDENTICAL
-    }
-    assert {result.issue.severity for result in results if result.issue} == {
-        Severity.WARNING
-    }
-    assert len({result.issue.issue_id for result in results if result.issue}) == 2
+    assert all(not hasattr(result, "issue") for result in results)
 
 
 def test_any_field_difference_marks_the_entire_group_conflicting() -> None:
@@ -91,12 +72,6 @@ def test_any_field_difference_marks_the_entire_group_conflicting() -> None:
     assert len(results) == 2
     assert {result.identity_status for result in results} == {
         IdentityStatus.DUPLICATE_CONFLICT
-    }
-    assert {result.issue.code for result in results if result.issue} == {
-        QualityIssueCode.SOURCE_ID_DUPLICATE_CONFLICT
-    }
-    assert {result.issue.severity for result in results if result.issue} == {
-        Severity.ERROR
     }
 
 
@@ -158,7 +133,6 @@ def test_source_ids_keep_leading_zero_and_large_identifier_semantics() -> None:
         SourceId("1234567890123456789"),
     )
     assert all(result.identity_status is IdentityStatus.UNIQUE for result in results)
-    assert all(result.issue is None for result in results)
 
 
 def test_case_and_concrete_source_entity_type_are_part_of_group_key() -> None:
@@ -194,7 +168,7 @@ def test_case_and_concrete_source_entity_type_are_part_of_group_key() -> None:
     assert all(result.identity_status is IdentityStatus.UNIQUE for result in results)
 
 
-def test_classification_and_issue_ids_are_independent_of_input_order() -> None:
+def test_classification_is_independent_of_input_order() -> None:
     fields = (("Station_ID", "station-1"), ("Station_Name", "name"))
     first = _record(source_id="station-1", data_row=2, decoded_fields=fields)
     second = _record(source_id="station-1", data_row=1, decoded_fields=fields)
@@ -208,78 +182,28 @@ def test_classification_and_issue_ids_are_independent_of_input_order() -> None:
     )
 
 
-def test_duplicate_issue_uses_existing_id_factory_for_canonical_target_and_issue(
-) -> None:
-    fields = (("Line_ID", "line-01"), ("Line_Length_km", ""))
+def test_repeated_locator_is_not_rejected_or_used_for_classification() -> None:
     first = _record(
         source_id="line-01",
         data_row=1,
-        decoded_fields=fields,
+        decoded_fields=(("Line_ID", "line-01"), ("Line_Length_km", "1")),
         source_entity_type=SourceEntityType.LINE,
         member="data/case/08_Line.csv",
     )
     second = _record(
         source_id="line-01",
-        data_row=2,
-        decoded_fields=fields,
+        data_row=1,
+        decoded_fields=(("Line_ID", "line-01"), ("Line_Length_km", "2")),
         source_entity_type=SourceEntityType.LINE,
         member="data/case/08_Line.csv",
     )
 
-    result = _classify(first, second)[0]
-    expected_equipment_id = SourceImportIdFactory.equipment_id(
-        CASE_ID,
-        EquipmentType.LINE,
-        SourceId("line-01"),
-        result.record.source_record_ref,
-    )
-    expected_target = EntityRef(
-        entity_type=Identifier("EQUIPMENT"),
-        entity_id=expected_equipment_id,
-    )
-    expected_issue_id = SourceImportIdFactory.quality_issue_id(
-        DATASET_ID,
-        CASE_ID,
-        expected_target,
-        "identity_status",
-        QualityIssueCode.SOURCE_ID_DUPLICATE_IDENTICAL,
-        result.record.source_record_ref,
-        "",
-    )
+    forward = _classify(first, second)
+    reverse = _classify(second, first)
 
-    assert result.issue is not None
-    assert result.issue.target_ref == expected_target
-    assert result.issue.issue_id == expected_issue_id
-    assert result.issue.source_mapping_id == "nanjing_csv"
-    assert result.issue.source_mapping_version == "0.2.0"
-
-
-def test_bus_duplicate_issue_targets_factory_generated_bus_id() -> None:
-    fields = (("Bus_ID", "bus-01"), ("Bus_Name", ""))
-    first = _record(
-        source_id="bus-01",
-        data_row=1,
-        decoded_fields=fields,
-        source_entity_type=SourceEntityType.BUS,
-        member="data/case/02_Bus.csv",
+    assert len(forward) == 2
+    assert forward == reverse
+    assert all(
+        result.identity_status is IdentityStatus.DUPLICATE_CONFLICT
+        for result in forward
     )
-    second = _record(
-        source_id="bus-01",
-        data_row=2,
-        decoded_fields=fields,
-        source_entity_type=SourceEntityType.BUS,
-        member="data/case/02_Bus.csv",
-    )
-
-    result = _classify(first, second)[0]
-    expected_target = EntityRef(
-        entity_type=Identifier("BUS"),
-        entity_id=SourceImportIdFactory.bus_id(
-            CASE_ID,
-            SourceId("bus-01"),
-            result.record.source_record_ref,
-        ),
-    )
-
-    assert result.issue is not None
-    assert result.issue.target_ref == expected_target

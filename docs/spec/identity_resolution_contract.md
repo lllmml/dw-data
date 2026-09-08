@@ -5,7 +5,7 @@
 | 项目 | 值 |
 |---|---|
 | 状态 | Source Import MVP 实现基线 |
-| 规范版本 | `0.1.0` |
+| 规范版本 | `0.1.1` |
 | Canonical 合同 | `docs/spec/canonical_data_spec.md` `0.3.0` |
 | Source Import 基线 | `docs/spec/source_import_foundation.md` `0.1.0` |
 | 首个 Source Mapping | `nanjing_csv` `0.2.0` |
@@ -39,11 +39,24 @@ Equipment 必须使用具体 source entity type 分组，不得先折叠为通�
 | `source_entity_type` | `SourceEntityType` | R | 第 2 节定义的具体源实体类型 |
 | `source_id` | `SourceId` | R | intake 解码后的非空原始字符串 |
 | `source_record_ref` | string | R | Intake 提供的稳定记录 locator |
-| `decoded_fields` | tuple[(string, string), ...] | R | 按版本化 source header 顺序保存的完整字段名和值 |
+| `decoded_fields` | tuple[(string, string), ...] | R | 从 `RawCsvRecord.fields` 逐项复制的完整字段名和值 |
 
 `decoded_fields` 的每个字段名和值都必须是字符串；空字段保持 `""`。分类器不得
 trim、转换大小写、执行 dtype inference、Unicode normalization、科学计数法展开
 或任何其他文本归一化。
+
+### 3.1 Source schema version 边界
+
+`SourceIdentityRecord` 不增加逐记录 `source_schema_version`。按 Source Intake
+Contract，`RawCsvRecord.fields` 只有在 header 与本次导入所用的版本化 registry
+字面精确匹配后才会产生，且完整保留该 header 顺序下的字段名和值。因此
+`decoded_fields` 已携带分类所需的版本化字段结构。
+
+一次分类调用必须只接收同一 source artifact、同一次 Adapter/import run 和同一
+版本化 source schema registry 产生的记录。mapping/schema 版本是 run-level
+metadata，由后续 Mapper 和 provenance 记录；它不参与 duplicate grouping 或字段
+比较，也不在每条 `SourceIdentityRecord` 中重复保存。分类器不负责验证或推断该
+run-level 前置条件。
 
 ## 4. Duplicate grouping key
 
@@ -76,19 +89,14 @@ locator 差异只保留各源记录身份，不把相同内容变为 conflict。
 
 ## 6. Duplicate outcome
 
-| 条件 | 每条组内记录的 `identity_status` | DataQualityIssue code | 默认 severity |
-|---|---|---|---|
-| group 仅一条记录 | `UNIQUE` | 无 | 无 |
-| group 多条且所有 `decoded_fields` 完全一致 | `DUPLICATE_IDENTICAL` | `SOURCE_ID_DUPLICATE_IDENTICAL` | `WARNING` |
-| group 多条且任意 `decoded_fields` 不同 | `DUPLICATE_CONFLICT` | `SOURCE_ID_DUPLICATE_CONFLICT` | `ERROR` |
+| 条件 | 每条组内记录的 `identity_status` |
+|---|---|
+| group 仅一条记录 | `UNIQUE` |
+| group 多条且所有 `decoded_fields` 完全一致 | `DUPLICATE_IDENTICAL` |
+| group 多条且任意 `decoded_fields` 不同 | `DUPLICATE_CONFLICT` |
 
 分类状态按整个 group 判定：一旦任意记录不同，同组所有记录均为
 `DUPLICATE_CONFLICT`，不得只标记差异行。
-
-每条 duplicate source record 各产生一条 `DataQualityIssue`，并携带该记录自己的
-`source_record_ref`。issue target 使用现有 `SourceImportIdFactory` 按该源记录建立的
-Canonical entity ID；issue ID 也必须通过该 factory 生成。南京 mapping 0.2.0
-使用 Source Import foundation 默认 severity，不定义 override。
 
 ## 7. 分类输出与确定性
 
@@ -98,17 +106,39 @@ Canonical entity ID；issue ID 也必须通过该 factory 生成。南京 mappin
 |---|---|---:|---|
 | `record` | `SourceIdentityRecord` | R | 原始分类输入，不得替换或合并 |
 | `identity_status` | `IdentityStatus` | R | 第 6 节结果 |
-| `issue` | `DataQualityIssue`/null | N | duplicate 时必需；`UNIQUE` 时为 null |
 
-输出按 `(case_id, source_entity_type, source_id, source_record_ref)` 的精确字符串值
-稳定排序。输入迭代顺序变化不得改变各 locator 对应的 status、issue ID、code 或
-severity。
+输出首先按 `(case_id, source_entity_type, source_id, source_record_ref)` 的精确
+字符串值稳定排序。若调用方提供重复的 `source_record_ref`，分类器不得拒绝输入；
+此时只为确定输出顺序使用 `decoded_fields` 作为最终 tie-breaker，不改变 group key
+或 duplicate comparison 定义。完全相同的重复输入仍保留其条数。
 
-## 8. MVP 行为与边界
+输入迭代顺序变化不得改变各输入内容对应的 `identity_status` 或输出内容。分类器
+不假设、不验证 `source_record_ref` 唯一性；真实 Intake 输出中的 locator 唯一性仍
+由 Source Intake Contract 负责。
+
+## 8. DataQualityIssue 边界
+
+分类器不创建 `DataQualityIssue`，也不接收 issue ID、severity 或 mapping metadata。
+Source Import 的 Mapper/import policy 层在消费分类结果后，按
+`source_import_foundation.md` 将 duplicate status 表达为相应质量事件：
+
+- `DUPLICATE_IDENTICAL` -> `SOURCE_ID_DUPLICATE_IDENTICAL`，默认 `WARNING`；
+- `DUPLICATE_CONFLICT` -> `SOURCE_ID_DUPLICATE_CONFLICT`，默认 `ERROR`。
+
+Canonical 0.3.0 的 `DataQualityIssue.target_ref` 是可空字段，因此不需要修改
+Canonical Model。若 Mapper 建立实体后创建 issue，可填写实际 Canonical target；
+若 import policy 在实体建立前创建 issue，则 `target_ref=null`，并以该记录的
+`source_record_ref` 及 `observed_value=source_id` 保持 source-side 可追踪性。issue
+ID 必须由创建 issue 的层通过现有 ID factory 生成，不得由身份分类器提前生成。
+
+## 9. MVP 行为与边界
 
 - 禁止 merge、deduplicate、覆盖或删除 source records。
-- identical duplicate 也必须保留所有 source records 和各自确定性 Canonical ID。
-- duplicate 只通过顶层实体 `identity_status` 和 `DataQualityIssue` 表达。
+- identical duplicate 也必须保留所有 source records。
+- 分类器只产生 `identity_status`；不得创建 Canonical entity、Canonical entity ID、
+  `EntityRef` 或 `DataQualityIssue`。
+- Mapper/import policy 最终通过顶层实体 `identity_status` 和对应
+  `DataQualityIssue` 表达 duplicate，但该表达不改变或合并 source records。
 - 分类器不修改 raw fields、source ID 或 locator。
 - 分类器不打开 ZIP、不读取 CSV，也不生成 `source_record_ref`。
 - 分类器不实现 Bus/Equipment mapper、reference resolver、connectivity 或 topology。
