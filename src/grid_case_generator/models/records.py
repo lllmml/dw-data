@@ -8,7 +8,7 @@ from decimal import Decimal
 from functools import lru_cache
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
-from .quality import DEFAULT_SEVERITY_BY_CODE, QualityIssueCode
+from .quality import QualityIssueCode
 from .types import (
     CanonicalId,
     ConnectivityStatus,
@@ -101,6 +101,13 @@ class TraceableRecord:
         if (self.source_mapping_id is None) != (self.source_mapping_version is None):
             raise ValueError(
                 "source_mapping_id and source_mapping_version must be present together"
+            )
+        if (
+            self.record_origin is RecordOrigin.SOURCE
+            and self.source_mapping_id is None
+        ):
+            raise ValueError(
+                "SOURCE records require source_mapping_id and source_mapping_version"
             )
 
 
@@ -351,15 +358,6 @@ class DataQualityIssue(TraceableRecord):
     severity: Severity
     observed_value: str | None
     message: str
-
-    def __post_init__(self) -> None:
-        TraceableRecord.__post_init__(self)
-        expected = DEFAULT_SEVERITY_BY_CODE[self.code]
-        if self.severity is not expected:
-            raise ValueError(
-                f"{self.code} requires default severity {expected}, got {self.severity}"
-            )
-
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class FieldProvenance(TraceableRecord):

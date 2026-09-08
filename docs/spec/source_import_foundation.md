@@ -147,6 +147,8 @@ ID 算法版本为 `source-import-id-v1`。每个 ID 的哈希输入是本节定
 
 `MISSING` 源引用主要由 `SourceReference`/Terminal 状态表达，不为每个空引用强制生成 issue。上表中特定的 feeder 级结果例外。issue 的存在不改变 6.1 节的边界。
 
+Canonical `DataQualityIssue` 记录只验证 `code` 和 `severity` 的类型/基本结构，不强制 severity 必须等于上表默认值。上表是 Source Import 默认 policy；映射特定 override 由版本化 Adapter / issue factory / validation policy 层明文选择。南京 mapping 0.2.0 未定义 override，因此必须使用上表默认值。
+
 与单条源记录相关的 issue 必须通过 Canonical 通用可追踪字段携带该行 `source_record_ref`；定位信息不得只出现在可读 `message` 中。`FieldProvenance` 的 `source_mapping_id/source_mapping_version` 同样使用 3 节所述通用可追踪字段。
 
 ## 8. 最小序列化与 unmapped source record

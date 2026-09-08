@@ -11,6 +11,7 @@ from grid_case_generator.validation.quality import (
     DEFAULT_SEVERITY_BY_CODE,
     ImportErrorCategory,
     QualityIssueCode,
+    default_severity_for_issue,
     import_status_for_error,
 )
 
@@ -47,22 +48,60 @@ def test_issue_code_registry_has_one_frozen_default_severity_per_code() -> None:
     } == EXPECTED_DEFAULTS
 
 
-def test_data_quality_issue_rejects_non_default_severity() -> None:
-    with pytest.raises(ValueError):
-        DataQualityIssue(
-            record_origin=RecordOrigin.DERIVED,
-            source_record_ref=None,
-            source_mapping_id=None,
-            source_mapping_version=None,
-            issue_id=CanonicalId("quality-issue:one"),
-            case_id=None,
-            target_ref=None,
-            field_path=None,
-            code=QualityIssueCode.SOURCE_FILE_NO_DATA_ROWS,
-            severity=Severity.ERROR,
-            observed_value=None,
-            message="wrong severity",
-        )
+def test_default_severity_policy_has_explicit_lookup_api() -> None:
+    assert (
+        default_severity_for_issue(QualityIssueCode.SOURCE_FILE_NO_DATA_ROWS)
+        is Severity.INFO
+    )
+    with pytest.raises(TypeError):
+        default_severity_for_issue("SOURCE_FILE_NO_DATA_ROWS")  # type: ignore[arg-type]
+
+
+def test_data_quality_issue_can_express_versioned_severity_override() -> None:
+    issue = DataQualityIssue(
+        record_origin=RecordOrigin.DERIVED,
+        source_record_ref=None,
+        source_mapping_id=None,
+        source_mapping_version=None,
+        issue_id=CanonicalId("quality-issue:one"),
+        case_id=None,
+        target_ref=None,
+        field_path=None,
+        code=QualityIssueCode.SOURCE_FILE_NO_DATA_ROWS,
+        severity=Severity.ERROR,
+        observed_value=None,
+        message="mapping policy explicitly overrides the foundation default",
+    )
+
+    assert issue.severity is Severity.ERROR
+    assert default_severity_for_issue(issue.code) is Severity.INFO
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [("code", "SOURCE_FILE_NO_DATA_ROWS"), ("severity", "ERROR")],
+)
+def test_data_quality_issue_still_requires_enum_types(
+    field: str, invalid_value: str
+) -> None:
+    arguments = {
+        "record_origin": RecordOrigin.DERIVED,
+        "source_record_ref": None,
+        "source_mapping_id": None,
+        "source_mapping_version": None,
+        "issue_id": CanonicalId("quality-issue:one"),
+        "case_id": None,
+        "target_ref": None,
+        "field_path": None,
+        "code": QualityIssueCode.SOURCE_FILE_NO_DATA_ROWS,
+        "severity": Severity.ERROR,
+        "observed_value": None,
+        "message": "invalid enum type",
+    }
+    arguments[field] = invalid_value
+
+    with pytest.raises(TypeError):
+        DataQualityIssue(**arguments)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

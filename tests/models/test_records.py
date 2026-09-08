@@ -312,6 +312,71 @@ def test_records_reject_float_for_decimal_fields() -> None:
         )
 
 
+def test_source_record_requires_mapping_identity_and_version() -> None:
+    with pytest.raises(
+        ValueError,
+        match="SOURCE records require source_mapping_id and source_mapping_version",
+    ):
+        Dataset(
+            record_origin=RecordOrigin.SOURCE,
+            source_record_ref=None,
+            source_mapping_id=None,
+            source_mapping_version=None,
+            dataset_id=CanonicalId("dataset:one"),
+            name="dataset",
+            source_uri=None,
+            source_checksum=None,
+            canonical_spec_version="0.3.0",
+            imported_at="2026-09-08T00:00:00+00:00",
+            import_status=ImportStatus.COMPLETE,
+        )
+
+
+def test_non_source_record_may_omit_mapping_identity_and_version() -> None:
+    record = Dataset(
+        record_origin=RecordOrigin.DERIVED,
+        source_record_ref=None,
+        source_mapping_id=None,
+        source_mapping_version=None,
+        dataset_id=CanonicalId("dataset:one"),
+        name="dataset",
+        source_uri=None,
+        source_checksum=None,
+        canonical_spec_version="0.3.0",
+        imported_at="2026-09-08T00:00:00+00:00",
+        import_status=ImportStatus.COMPLETE,
+    )
+
+    assert record.source_mapping_id is None
+    assert record.source_mapping_version is None
+
+
+def test_aggregate_source_record_may_omit_source_record_ref() -> None:
+    profile = SimulationProfile(
+        record_origin=RecordOrigin.SOURCE,
+        source_record_ref=None,
+        source_mapping_id="test_mapping",
+        source_mapping_version="1.0.0",
+        simulation_profile_id=CanonicalId("simulation-profile:one"),
+        case_id=CASE_ID,
+        scenario_id=None,
+        mode=None,
+        solver=None,
+        frequency_hz=None,
+        source_voltage_kv=None,
+        source_bus_source_ref=MISSING_REF,
+        output_voltage_bus_source_ref=MISSING_REF,
+        max_iterations=None,
+        tolerance=None,
+        mva_sc3=None,
+        mva_sc1=None,
+        unit_system=None,
+        extensions=None,
+    )
+
+    assert profile.source_record_ref is None
+
+
 def test_exact_source_reference_does_not_require_confirmed_connectivity() -> None:
     terminal = Terminal(
         **TRACE,

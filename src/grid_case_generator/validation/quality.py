@@ -6,7 +6,7 @@ from grid_case_generator.models.quality import (
     DEFAULT_SEVERITY_BY_CODE,
     QualityIssueCode,
 )
-from grid_case_generator.models.types import ImportStatus
+from grid_case_generator.models.types import ImportStatus, Severity
 
 
 class ImportErrorCategory(StrEnum):
@@ -14,6 +14,14 @@ class ImportErrorCategory(StrEnum):
     RECORD_FATAL = "RECORD_FATAL"
     PARTIAL_PROCESSING = "PARTIAL_PROCESSING"
     RUN_FATAL = "RUN_FATAL"
+
+
+def default_severity_for_issue(code: QualityIssueCode) -> Severity:
+    """Return the Source Import foundation default for an issue code."""
+
+    if not isinstance(code, QualityIssueCode):
+        raise TypeError("code must be QualityIssueCode")
+    return DEFAULT_SEVERITY_BY_CODE[code]
 
 
 def import_status_for_error(
