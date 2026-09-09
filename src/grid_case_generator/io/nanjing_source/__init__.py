@@ -25,6 +25,14 @@ from .models import (
     SourceCaseInventory,
     SourceDatasetInventory,
 )
+from .reference_integration import (
+    ReferenceIntegrationOutcome,
+    build_nanjing_reference_candidate_index,
+    integrate_bus_station_reference,
+    integrate_feeder_source_bus_reference,
+    reference_candidate_from_mapped_record,
+)
+from .reference_issue_policy import reference_issues_for_result
 from .schema import (
     NANJING_SOURCE_SCHEMA,
     SourceFileSchema,
@@ -37,6 +45,7 @@ __all__ = [
     "IntakeDiagnosticCode",
     "NANJING_SOURCE_SCHEMA",
     "RecordMappingOutcome",
+    "ReferenceIntegrationOutcome",
     "RawCsvRecord",
     "RawSourceFile",
     "SourceCaseInventory",
@@ -47,12 +56,17 @@ __all__ = [
     "SourceRecordRef",
     "UnmappedSourceRecord",
     "UnsafeZipMemberPath",
+    "build_nanjing_reference_candidate_index",
     "inventory_archive",
+    "integrate_bus_station_reference",
+    "integrate_feeder_source_bus_reference",
     "map_dataset",
     "map_feeder",
     "map_grid_case",
     "map_station",
     "read_raw_csv_member",
+    "reference_candidate_from_mapped_record",
+    "reference_issues_for_result",
     "source_record_ref",
     "validate_zip_member_path",
     "CANONICAL_SPEC_VERSION",
