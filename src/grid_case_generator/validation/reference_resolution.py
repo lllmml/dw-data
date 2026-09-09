@@ -31,6 +31,12 @@ _RESOLUTION_STATUSES = {
 }
 
 
+def _index_key_sort_key(
+    key: ReferenceCandidateKey,
+) -> tuple[str, str, str]:
+    return (key[0], key[1].value, key[2])
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ReferenceResolutionRequest:
     case_id: CanonicalId
@@ -93,6 +99,8 @@ class ReferenceCandidate:
             raise TypeError("candidate_source_entity_type must be SourceEntityType")
         if not isinstance(self.source_id, SourceId):
             raise TypeError("source_id must be SourceId")
+        if self.source_id == "":
+            raise ValueError("source_id must be non-empty")
         if not isinstance(self.source_record_ref, str):
             raise TypeError("source_record_ref must be str")
         if self.source_record_ref == "":
@@ -166,7 +174,10 @@ class ReferenceCandidateIndex:
             ):
                 raise ValueError("candidate is stored under the wrong index key")
             keys.append(key)
-        if tuple(sorted(keys)) != tuple(keys) or len(set(keys)) != len(keys):
+        if (
+            tuple(sorted(keys, key=_index_key_sort_key)) != tuple(keys)
+            or len(set(keys)) != len(keys)
+        ):
             raise ValueError("candidate index keys must be unique and sorted")
 
     def _lookup(
@@ -174,10 +185,11 @@ class ReferenceCandidateIndex:
     ) -> tuple[ReferenceCandidate, ...]:
         lower = 0
         upper = len(self.entries)
+        target_sort_key = _index_key_sort_key(key)
         while lower < upper:
             middle = (lower + upper) // 2
             middle_key = self.entries[middle][0]
-            if middle_key < key:
+            if _index_key_sort_key(middle_key) < target_sort_key:
                 lower = middle + 1
             else:
                 upper = middle
@@ -266,7 +278,9 @@ def build_reference_candidate_index(
         groups.setdefault(key, []).append(candidate)
     entries = tuple(
         (key, tuple(sorted(group, key=_candidate_sort_key)))
-        for key, group in sorted(groups.items())
+        for key, group in sorted(
+            groups.items(), key=lambda item: _index_key_sort_key(item[0])
+        )
     )
     return ReferenceCandidateIndex(entries=entries)
 

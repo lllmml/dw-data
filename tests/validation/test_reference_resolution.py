@@ -1,3 +1,7 @@
+import random
+
+import pytest
+
 from grid_case_generator.models.records import Bus
 from grid_case_generator.models.types import (
     CanonicalId,
@@ -214,6 +218,64 @@ def test_candidate_and_allowed_type_order_do_not_change_resolution() -> None:
     assert forward.resolution_status is reverse.resolution_status
     assert forward.candidates == reverse.candidates
     assert forward.resolved_ref == reverse.resolved_ref
+
+
+def test_mixed_source_type_index_order_is_deterministic() -> None:
+    candidates = (
+        _candidate(
+            "transformer-1",
+            source_entity_type=SourceEntityType.TRANSFORMER,
+            case_id=CASE_B,
+            row=2,
+        ),
+        _candidate("station-1", source_entity_type=SourceEntityType.STATION),
+        _candidate("line-1", source_entity_type=SourceEntityType.LINE),
+        _candidate("bus-1", source_entity_type=SourceEntityType.BUS),
+        _candidate("switch-1", source_entity_type=SourceEntityType.SWITCH),
+        _candidate(
+            "access-point-1",
+            source_entity_type=SourceEntityType.ACCESS_POINT,
+        ),
+    )
+    expected_keys = tuple(
+        sorted(
+            (
+                (
+                    candidate.case_id,
+                    candidate.candidate_source_entity_type,
+                    candidate.source_id,
+                )
+                for candidate in candidates
+            ),
+            key=lambda key: (key[0], key[1].value, key[2]),
+        )
+    )
+
+    indexes = []
+    for seed in range(10):
+        shuffled = list(candidates)
+        random.Random(seed).shuffle(shuffled)
+        indexes.append(build_reference_candidate_index(shuffled))
+
+    assert all(index.entries == indexes[0].entries for index in indexes)
+    assert tuple(key for key, _ in indexes[0].entries) == expected_keys
+
+
+def test_reference_candidate_rejects_empty_source_id() -> None:
+    empty_source_id = str.__new__(SourceId, "")
+
+    with pytest.raises(ValueError, match="source_id must be non-empty"):
+        ReferenceCandidate(
+            case_id=CASE_A,
+            candidate_source_entity_type=SourceEntityType.BUS,
+            source_id=empty_source_id,
+            source_record_ref="zip-member:case/02_Bus.csv#data-row=1",
+            identity_status=IdentityStatus.UNIQUE,
+            entity_ref=EntityRef(
+                entity_type=Identifier("BUS"),
+                entity_id=CanonicalId("bus:existing"),
+            ),
+        )
 
 
 def test_resolver_is_pure_and_returns_no_issue_or_connectivity() -> None:
