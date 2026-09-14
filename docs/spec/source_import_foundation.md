@@ -5,9 +5,9 @@
 | 项目 | 值 |
 |---|---|
 | 状态 | Source Import MVP 实现基线 |
-| 规范版本 | `0.1.0` |
-| Canonical 合同 | `docs/spec/canonical_data_spec.md` `0.3.0` |
-| 首个 Source Adapter | `docs/spec/nanjing_mapping_spec.md` `0.2.0` |
+| 规范版本 | `0.2.0` |
+| Canonical 合同 | `docs/spec/canonical_data_spec.md` `0.4.0` |
+| 首个 Source Adapter | `docs/spec/nanjing_mapping_spec.md` `0.3.0` |
 
 本文定义 Source Import MVP 的工程表示、确定性 ID、记录定位、导入错误分类、质量代码、最小序列化和 Python 工程基线。它不改变 Canonical 领域语义，不定义南京字段映射，也不授权任何数据修复或生成。
 
@@ -91,7 +91,7 @@ ID 算法版本为 `source-import-id-v1`。每个 ID 的哈希输入是本节定
 
 - Source Import 对文件型源制品必须计算 SHA-256，即使 Canonical 通用合同允许其他产生方的 `source_checksum` 为空。
 - `dataset_id` 只表示源制品身份；不包含 `source_uri`、Dataset 可读名称、`source_mapping_id`、`source_mapping_version` 或 Canonical spec version。同一字节级源制品在 mapping version 升级后的 dataset/case/source entity ID 必须保持不变。
-- 源实体 ID 总是包含 `source_record_ref`。因此同一逻辑键的重复行仍保持独立身份，无需在重复发生后切换 ID 算法。
+- Mapper 按源行建立的源实体 ID 总是包含 `source_record_ref`。Case assembly 对 identical duplicate group 只发布最小 locator 对应的 mapper output；其他 raw rows 通过 row accountability 关联到该 entity。Conflicting duplicate group 不发布任一 mapper output。该规则不改变 ID 算法，也不允许为 conflict 任取 representative。
 - `source_field` 使用源 schema 中的精确字段名。南京开关量测中，I/P/Q 三个字段分别形成至多一条 OperationalSeries。
 - `occurrence_key` 是 validator/mapper 对同一 scope、field 和 code 的稳定机器区分符；只有一个事件时固定为空字符串。它可使用候选 source entity type 或稳定检查项名，不得使用列表遍历顺序、随机数或可读 message。
 - `FieldProvenance` 表示 mapping 事实，因此它的 ID 包含 mapping ID/version；这不影响 Dataset、GridCase 和源实体的稳定身份。
@@ -122,7 +122,7 @@ ID 算法版本为 `source-import-id-v1`。每个 ID 的哈希输入是本节定
 
 ## 7. DataQualityIssue 稳定代码与默认严重度
 
-下表是 Source Import MVP 允许的最小稳定 code 集。南京 mapping `0.2.0` 没有 severity override，因此表中严重度对其是强制值。未来 Adapter 只能通过版本化 mapping 规范明文 override，实现不得按运行分支自行选择 severity。
+下表是 Source Import MVP 允许的最小稳定 code 集。南京 mapping `0.3.0` 没有 severity override，因此表中严重度对其是强制值。未来 Adapter 只能通过版本化 mapping 规范明文 override，实现不得按运行分支自行选择 severity。
 
 | code | 默认 severity | 使用条件 |
 |---|---|---|
@@ -150,7 +150,7 @@ ID 算法版本为 `source-import-id-v1`。每个 ID 的哈希输入是本节定
 
 `MISSING` 源引用主要由 `SourceReference`/Terminal 状态表达，不为每个空引用强制生成 issue。上表中特定的 feeder 级结果例外。issue 的存在不改变 6.1 节的边界。
 
-Canonical `DataQualityIssue` 记录只验证 `code` 和 `severity` 的类型/基本结构，不强制 severity 必须等于上表默认值。上表是 Source Import 默认 policy；映射特定 override 由版本化 Adapter / issue factory / validation policy 层明文选择。南京 mapping 0.2.0 未定义 override，因此必须使用上表默认值。
+Canonical `DataQualityIssue` 记录只验证 `code` 和 `severity` 的类型/基本结构，不强制 severity 必须等于上表默认值。上表是 Source Import 默认 policy；映射特定 override 由版本化 Adapter / issue factory / validation policy 层明文选择。南京 mapping 0.3.0 未定义 override，因此必须使用上表默认值。
 
 与单条源记录相关的 issue 必须通过 Canonical 通用可追踪字段携带该行 `source_record_ref`；定位信息不得只出现在可读 `message` 中。`FieldProvenance` 的 `source_mapping_id/source_mapping_version` 同样使用 3 节所述通用可追踪字段。
 
@@ -198,3 +198,6 @@ Source Import implementation 必须在开始前确认：
 - 每个 Source Import 可创建的 CanonicalId 字段都在 5.2 节有唯一算法；
 - 质量 code 和 severity 来自本规范或明确的版本化 override；
 - 任何未确认的业务语义都不会作为 resolver 默认规则。
+
+Station/Feeder/Bus 的 D-2-E 局部装配、duplicate publication 和 row accountability
+另见 `docs/spec/case_assembly_contract.md`。该 result 不决定 Dataset ImportStatus。

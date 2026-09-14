@@ -39,7 +39,7 @@ from .models import RawCsvRecord, SourceCaseInventory, SourceDatasetInventory
 from .schema import NANJING_SOURCE_SCHEMA, SourceFileType
 
 
-CANONICAL_SPEC_VERSION = "0.3.0"
+CANONICAL_SPEC_VERSION = "0.4.0"
 _MAPPING_ID = NANJING_SOURCE_SCHEMA.mapping_id
 _MAPPING_VERSION = NANJING_SOURCE_SCHEMA.mapping_version
 _T = TypeVar("_T")
@@ -401,34 +401,41 @@ def map_feeder(
     )
 
 
-def _bus_boolean(raw_value: str) -> bool | None:
+def _optional_boolean(
+    raw_value: str,
+    *,
+    dataset_id: CanonicalId,
+    case_id: CanonicalId,
+    record: RawCsvRecord,
+    target_ref: EntityRef,
+    field_path: str,
+    source_field: str,
+) -> tuple[bool | None, DataQualityIssue | None]:
     if raw_value == "":
-        return None
+        return None, None
     normalized = raw_value.lower()
     if normalized == "true":
-        return True
+        return True, None
     if normalized == "false":
-        return False
-    raise ValueError("Bus_IsSource issue handling is outside this Slice")
-
-
-def _bus_base_voltage(raw_value: str) -> Decimal | None:
-    if raw_value == "":
-        return None
-    try:
-        value = Decimal(raw_value)
-    except InvalidOperation as error:
-        raise ValueError(
-            "Bus_BaseKV issue handling is outside this Slice"
-        ) from error
-    if not value.is_finite():
-        raise ValueError("Bus_BaseKV issue handling is outside this Slice")
-    return value
+        return False, None
+    return None, _issue(
+        dataset_id=dataset_id,
+        case_id=case_id,
+        record=record,
+        target_ref=target_ref,
+        field_path=field_path,
+        code=QualityIssueCode.SOURCE_VALUE_PARSE_FAILED,
+        observed_value=raw_value,
+        occurrence_key=source_field,
+        message=f"optional Boolean field {source_field} could not be parsed",
+    )
 
 
 def map_bus(
     record: RawCsvRecord,
     classification: SourceIdentityClassification,
+    *,
+    dataset_id: CanonicalId,
 ) -> RecordMappingOutcome[Bus]:
     """Map one already-classified Bus source record without resolving references."""
 
@@ -452,6 +459,30 @@ def map_bus(
     bus_id = SourceImportIdFactory.bus_id(
         identity.case_id, source_id, record.source_record_ref
     )
+    target_ref = EntityRef(
+        entity_type=Identifier("BUS"), entity_id=bus_id
+    )
+    base_voltage_kv, voltage_issue = _optional_decimal(
+        fields["Bus_BaseKV"],
+        dataset_id=dataset_id,
+        case_id=identity.case_id,
+        record=record,
+        target_ref=target_ref,
+        field_path="bus.base_voltage_kv",
+        source_field="Bus_BaseKV",
+    )
+    is_source, boolean_issue = _optional_boolean(
+        fields["Bus_IsSource"],
+        dataset_id=dataset_id,
+        case_id=identity.case_id,
+        record=record,
+        target_ref=target_ref,
+        field_path="bus.is_source",
+        source_field="Bus_IsSource",
+    )
+    issues = tuple(
+        issue for issue in (voltage_issue, boolean_issue) if issue is not None
+    )
     raw_station_ref = fields["Bus_Station_ID"]
     station_source_ref = SourceReference(
         raw_ref=SourceId(raw_station_ref) if raw_station_ref != "" else None,
@@ -469,14 +500,16 @@ def map_bus(
         source_id=source_id,
         identity_status=classification.identity_status,
         name=_nullable_text(fields["Bus_Name"]),
-        base_voltage_kv=_bus_base_voltage(fields["Bus_BaseKV"]),
+        base_voltage_kv=base_voltage_kv,
         phases=None,
         station_source_ref=station_source_ref,
-        is_source=_bus_boolean(fields["Bus_IsSource"]),
+        is_source=is_source,
     )
     return RecordMappingOutcome(
         record=bus,
-        issues=(),
+        issues=issues,
         unmapped_record=None,
-        error_category=None,
+        error_category=(
+            ImportErrorCategory.FIELD_RECOVERABLE if issues else None
+        ),
     )

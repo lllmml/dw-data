@@ -6,9 +6,9 @@
 |---|---|
 | 状态 | Source Intake / Canonical Mapper 稳定接口 |
 | 规范版本 | `0.1.0` |
-| Canonical 合同 | `docs/spec/canonical_data_spec.md` `0.3.0` |
-| Source Import 基线 | `docs/spec/source_import_foundation.md` `0.1.0` |
-| 首个实现 | 南京 ZIP / CSV intake，mapping `nanjing_csv` `0.2.0` |
+| Canonical 合同 | `docs/spec/canonical_data_spec.md` `0.4.0` |
+| Source Import 基线 | `docs/spec/source_import_foundation.md` `0.2.0` |
+| 首个实现 | 南京 ZIP / CSV intake，mapping `nanjing_csv` `0.3.0` |
 
 本文只定义 Source Intake 的输入、输出和不变量。它不定义 CSV 到
 Canonical 字段的映射、重复身份判定、引用解析、连接推断或任何消费者逻辑。

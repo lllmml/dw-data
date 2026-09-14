@@ -116,7 +116,7 @@ def test_dataset_mapper_uses_intake_checksum_and_explicit_import_metadata() -> N
     assert first.dataset_id == DATASET_ID == later.dataset_id
     assert first.source_checksum == f"sha256:{CHECKSUM_HEX}"
     assert first.source_uri == "data/raw/nanjing.zip"
-    assert first.canonical_spec_version == CANONICAL_SPEC_VERSION == "0.3.0"
+    assert first.canonical_spec_version == CANONICAL_SPEC_VERSION == "0.4.0"
     assert first.imported_at == "2026-09-08T12:00:00+08:00"
     assert first.import_status is ImportStatus.COMPLETE
     assert first.record_origin is RecordOrigin.SOURCE
@@ -156,7 +156,7 @@ def test_grid_case_mapper_preserves_key_and_does_not_infer_feeder() -> None:
     assert first.record_origin is RecordOrigin.SOURCE
     assert first.source_record_ref is None
     assert first.source_mapping_id == "nanjing_csv"
-    assert first.source_mapping_version == "0.2.0"
+    assert first.source_mapping_version == "0.3.0"
 
 
 def test_station_mapper_preserves_source_identity_trace_and_nulls() -> None:
@@ -184,7 +184,7 @@ def test_station_mapper_preserves_source_identity_trace_and_nulls() -> None:
     )
     assert station.source_record_ref == raw.source_record_ref
     assert station.source_mapping_id == "nanjing_csv"
-    assert station.source_mapping_version == "0.2.0"
+    assert station.source_mapping_version == "0.3.0"
     assert station.station_type is None
     assert station.name is None
     assert station.nominal_voltage_kv == Decimal("10.50")
@@ -200,7 +200,7 @@ def test_bus_mapper_maps_unique_classified_record_without_resolving_reference() 
     )
     classification = _classification(raw)
 
-    outcome = map_bus(raw, classification)
+    outcome = map_bus(raw, classification, dataset_id=DATASET_ID)
 
     assert outcome.record is not None
     bus = outcome.record
@@ -224,7 +224,7 @@ def test_bus_mapper_maps_unique_classified_record_without_resolving_reference() 
     assert bus.record_origin is RecordOrigin.SOURCE
     assert bus.source_record_ref == raw.source_record_ref
     assert bus.source_mapping_id == "nanjing_csv"
-    assert bus.source_mapping_version == "0.2.0"
+    assert bus.source_mapping_version == "0.3.0"
     assert outcome.issues == ()
     assert outcome.unmapped_record is None
     assert outcome.error_category is None
@@ -242,7 +242,11 @@ def test_bus_mapper_keeps_every_duplicate_source_record() -> None:
     )
 
     buses = tuple(
-        map_bus(raw_by_ref[item.record.source_record_ref], item).record
+        map_bus(
+            raw_by_ref[item.record.source_record_ref],
+            item,
+            dataset_id=DATASET_ID,
+        ).record
         for item in classifications
     )
 
@@ -265,11 +269,37 @@ def test_bus_mapper_output_is_deterministic() -> None:
     )
     classification = _classification(raw)
 
-    first = map_bus(raw, classification)
-    second = map_bus(raw, classification)
+    first = map_bus(raw, classification, dataset_id=DATASET_ID)
+    second = map_bus(raw, classification, dataset_id=DATASET_ID)
 
     assert first == second
 
+
+def test_bus_optional_decimal_and_boolean_failures_are_recoverable() -> None:
+    raw = _raw_record(
+        SourceFileType.BUS,
+        ("bus-1", "name", "not-a-decimal", "", "", "not-a-boolean"),
+    )
+
+    outcome = map_bus(raw, _classification(raw), dataset_id=DATASET_ID)
+
+    assert outcome.record is not None
+    assert outcome.record.base_voltage_kv is None
+    assert outcome.record.is_source is None
+    assert outcome.unmapped_record is None
+    assert outcome.error_category is ImportErrorCategory.FIELD_RECOVERABLE
+    assert tuple(issue.code for issue in outcome.issues) == (
+        QualityIssueCode.SOURCE_VALUE_PARSE_FAILED,
+        QualityIssueCode.SOURCE_VALUE_PARSE_FAILED,
+    )
+    assert tuple(issue.field_path for issue in outcome.issues) == (
+        "bus.base_voltage_kv",
+        "bus.is_source",
+    )
+    assert tuple(issue.observed_value for issue in outcome.issues) == (
+        "not-a-decimal",
+        "not-a-boolean",
+    )
 
 def test_station_optional_decimal_failure_is_recoverable() -> None:
     raw = _raw_record(
@@ -348,7 +378,7 @@ def test_feeder_mapper_preserves_raw_reference_without_resolving_connectivity() 
     assert feeder.source_bus_source_ref is not None
     assert feeder.source_record_ref == raw.source_record_ref
     assert feeder.source_mapping_id == "nanjing_csv"
-    assert feeder.source_mapping_version == "0.2.0"
+    assert feeder.source_mapping_version == "0.3.0"
     assert feeder.source_bus_source_ref.raw_ref == SourceId("001_bs")
     assert feeder.source_bus_source_ref.resolved_source_ref is None
     assert (

@@ -5,10 +5,10 @@
 | 项目 | 值 |
 |---|---|
 | 状态 | Source Import MVP 实现基线 |
-| 规范版本 | `0.1.1` |
-| Canonical 合同 | `docs/spec/canonical_data_spec.md` `0.3.0` |
-| Source Import 基线 | `docs/spec/source_import_foundation.md` `0.1.0` |
-| 首个 Source Mapping | `nanjing_csv` `0.2.0` |
+| 规范版本 | `0.2.0` |
+| Canonical 合同 | `docs/spec/canonical_data_spec.md` `0.4.0` |
+| Source Import 基线 | `docs/spec/source_import_foundation.md` `0.2.0` |
+| 首个 Source Mapping | `nanjing_csv` `0.3.0` |
 
 本文只定义源实体身份分组、重复分类和结果表达。它不定义 Canonical 字段映射、
 源引用解析、connectivity、拓扑、合并或数据治理规则。
@@ -125,7 +125,7 @@ Source Import 的 Mapper/import policy 层在消费分类结果后，按
 - `DUPLICATE_IDENTICAL` -> `SOURCE_ID_DUPLICATE_IDENTICAL`，默认 `WARNING`；
 - `DUPLICATE_CONFLICT` -> `SOURCE_ID_DUPLICATE_CONFLICT`，默认 `ERROR`。
 
-Canonical 0.3.0 的 `DataQualityIssue.target_ref` 是可空字段，因此不需要修改
+Canonical 0.4.0 的 `DataQualityIssue.target_ref` 是可空字段，因此不需要修改
 Canonical Model。若 Mapper 建立实体后创建 issue，可填写实际 Canonical target；
 若 import policy 在实体建立前创建 issue，则 `target_ref=null`，并以该记录的
 `source_record_ref` 及 `observed_value=source_id` 保持 source-side 可追踪性。issue
@@ -133,8 +133,9 @@ ID 必须由创建 issue 的层通过现有 ID factory 生成，不得由身份�
 
 ## 9. MVP 行为与边界
 
-- 禁止 merge、deduplicate、覆盖或删除 source records。
-- identical duplicate 也必须保留所有 source records。
+- 禁止 merge、覆盖或删除 source records；每条 duplicate row 必须进入 row accountability。
+- Identical duplicate 的下游 assembly 可按版本化合同只发布一个 Canonical entity，但必须保留并关联所有 source rows。
+- Conflicting duplicate 的下游 assembly 不得发布任一行对应的 Canonical entity，也不得选择 representative。
 - 分类器只产生 `identity_status`；不得创建 Canonical entity、Canonical entity ID、
   `EntityRef` 或 `DataQualityIssue`。
 - Mapper/import policy 最终通过顶层实体 `identity_status` 和对应
@@ -144,3 +145,7 @@ ID 必须由创建 issue 的层通过现有 ID factory 生成，不得由身份�
 - 分类器不实现 Bus/Equipment mapper、reference resolver、connectivity 或 topology。
 - `DUPLICATE_IDENTICAL` 不授权后续层任选一条记录；引用命中 duplicate identity 时
   仍按 mapping contract 处理为 ambiguous。
+
+南京 D-2-E 的唯一 published representation、conflict marker 和 row association
+规则由 `docs/spec/case_assembly_contract.md` 冻结。`SourceIdentityRecord` 仍只作为
+classifier 输入；assembly 不创建第二套 identity record。

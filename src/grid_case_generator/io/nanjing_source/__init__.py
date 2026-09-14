@@ -1,6 +1,13 @@
 """Read-only intake primitives for the Nanjing source archive."""
 
 from .archive import inventory_archive
+from .case_assembly import (
+    CaseAssemblyResult,
+    CaseRowMappingOutcome,
+    RowAccountability,
+    RowTerminalCategory,
+    assemble_station_feeder_bus_case,
+)
 from .csv_reader import read_raw_csv_member
 from .locator import (
     SourceRecordRef,
@@ -16,6 +23,7 @@ from .mapping import (
     map_feeder,
     map_grid_case,
     map_station,
+    map_bus,
 )
 from .models import (
     IntakeDiagnostic,
@@ -45,9 +53,13 @@ __all__ = [
     "IntakeDiagnosticCode",
     "NANJING_SOURCE_SCHEMA",
     "RecordMappingOutcome",
+    "CaseAssemblyResult",
+    "CaseRowMappingOutcome",
     "ReferenceIntegrationOutcome",
     "RawCsvRecord",
     "RawSourceFile",
+    "RowAccountability",
+    "RowTerminalCategory",
     "SourceCaseInventory",
     "SourceDatasetInventory",
     "SourceFileSchema",
@@ -57,10 +69,12 @@ __all__ = [
     "UnmappedSourceRecord",
     "UnsafeZipMemberPath",
     "build_nanjing_reference_candidate_index",
+    "assemble_station_feeder_bus_case",
     "inventory_archive",
     "integrate_bus_station_reference",
     "integrate_feeder_source_bus_reference",
     "map_dataset",
+    "map_bus",
     "map_feeder",
     "map_grid_case",
     "map_station",

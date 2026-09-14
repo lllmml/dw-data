@@ -112,6 +112,7 @@ def _mapped_bus(
             record=identity,
             identity_status=identity_status,
         ),
+        dataset_id=DATASET_ID,
     )
     assert outcome.record is not None
     return raw, outcome.record
@@ -174,44 +175,23 @@ def test_candidate_builder_rejects_non_adapter_provenance() -> None:
         )
 
 
-@pytest.mark.parametrize(
-    ("identity_status", "names"),
-    (
-        (IdentityStatus.DUPLICATE_IDENTICAL, ("same", "same")),
-        (IdentityStatus.DUPLICATE_CONFLICT, ("first", "second")),
-    ),
-)
-def test_candidate_builder_preserves_all_duplicate_records(
-    identity_status: IdentityStatus,
-    names: tuple[str, str],
-) -> None:
-    _, first = _mapped_station(
+def test_candidate_builder_preserves_published_identical_identity_status() -> None:
+    _, representative = _mapped_station(
         "duplicate",
         data_row=1,
-        name=names[0],
-        identity_status=identity_status,
-    )
-    _, second = _mapped_station(
-        "duplicate",
-        data_row=2,
-        name=names[1],
-        identity_status=identity_status,
+        name="same",
+        identity_status=IdentityStatus.DUPLICATE_IDENTICAL,
     )
 
-    index = build_nanjing_reference_candidate_index((second, first))
+    index = build_nanjing_reference_candidate_index((representative,))
 
     assert len(index.entries) == 1
     key, candidates = index.entries[0]
     assert key == (CASE_ID, SourceEntityType.STATION, SourceId("duplicate"))
-    assert len(candidates) == 2
-    assert {candidate.source_record_ref for candidate in candidates} == {
-        first.source_record_ref,
-        second.source_record_ref,
-    }
-    assert {candidate.entity_ref.entity_id for candidate in candidates} == {
-        first.station_id,
-        second.station_id,
-    }
+    assert len(candidates) == 1
+    assert candidates[0].source_record_ref == representative.source_record_ref
+    assert candidates[0].entity_ref.entity_id == representative.station_id
+    assert candidates[0].identity_status is IdentityStatus.DUPLICATE_IDENTICAL
 
 
 def test_bus_reference_is_resolved_into_a_new_immutable_record() -> None:
@@ -297,14 +277,9 @@ def test_missing_remains_empty_in_resolver_and_none_only_in_canonical() -> None:
 
 
 def test_duplicate_candidate_resolution_is_ambiguous_without_selection() -> None:
-    _, first = _mapped_station(
+    _, representative = _mapped_station(
         "station-1",
         data_row=1,
-        identity_status=IdentityStatus.DUPLICATE_IDENTICAL,
-    )
-    _, second = _mapped_station(
-        "station-1",
-        data_row=2,
         identity_status=IdentityStatus.DUPLICATE_IDENTICAL,
     )
     raw_bus, bus = _mapped_bus("bus-1", "station-1")
@@ -312,11 +287,11 @@ def test_duplicate_candidate_resolution_is_ambiguous_without_selection() -> None
     outcome = integrate_bus_station_reference(
         raw_bus,
         bus,
-        build_nanjing_reference_candidate_index((second, first)),
+        build_nanjing_reference_candidate_index((representative,)),
     )
 
     assert outcome.resolution.resolution_status is SourceReferenceStatus.AMBIGUOUS
-    assert len(outcome.resolution.candidates) == 2
+    assert len(outcome.resolution.candidates) == 1
     assert outcome.record.station_source_ref is not None
     assert outcome.record.station_source_ref.resolved_source_ref is None
 
@@ -345,22 +320,16 @@ def test_adapter_policy_maps_reference_status_to_issue_and_severity() -> None:
 
 
 def test_adapter_policy_allows_explicit_severity_policy_override() -> None:
-    _, first = _mapped_station(
+    _, representative = _mapped_station(
         "station-1",
         data_row=1,
-        identity_status=IdentityStatus.DUPLICATE_CONFLICT,
-    )
-    _, second = _mapped_station(
-        "station-1",
-        data_row=2,
-        name="different",
-        identity_status=IdentityStatus.DUPLICATE_CONFLICT,
+        identity_status=IdentityStatus.DUPLICATE_IDENTICAL,
     )
     raw_bus, bus = _mapped_bus("bus-1", "station-1")
     outcome = integrate_bus_station_reference(
         raw_bus,
         bus,
-        build_nanjing_reference_candidate_index((first, second)),
+        build_nanjing_reference_candidate_index((representative,)),
     )
     observed_codes: list[QualityIssueCode] = []
 

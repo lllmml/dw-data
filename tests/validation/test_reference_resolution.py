@@ -15,6 +15,7 @@ from grid_case_generator.models.types import (
 from grid_case_generator.validation.identity import SourceEntityType
 from grid_case_generator.validation.reference_resolution import (
     ReferenceCandidate,
+    ReferenceIdentityConflict,
     ReferenceResolutionRequest,
     build_reference_candidate_index,
     resolve_source_reference,
@@ -141,18 +142,49 @@ def test_single_duplicate_identical_candidate_is_ambiguous() -> None:
     assert result.resolved_ref is None
 
 
-def test_single_duplicate_conflict_candidate_is_ambiguous() -> None:
-    candidate = _candidate(
-        "bus-1", identity_status=IdentityStatus.DUPLICATE_CONFLICT
+def test_conflicting_identity_cannot_be_a_canonical_candidate() -> None:
+    with pytest.raises(ValueError, match="ReferenceIdentityConflict"):
+        _candidate("bus-1", identity_status=IdentityStatus.DUPLICATE_CONFLICT)
+
+
+def test_conflicting_identity_without_canonical_candidate_is_ambiguous() -> None:
+    conflict = ReferenceIdentityConflict(
+        case_id=CASE_A,
+        source_entity_type=SourceEntityType.BUS,
+        source_id=SourceId("bus-1"),
+        source_record_refs=(
+            "zip-member:case/02_Bus.csv#data-row=1",
+            "zip-member:case/02_Bus.csv#data-row=2",
+        ),
     )
+
     result = resolve_source_reference(
-        build_reference_candidate_index((candidate,)),
+        build_reference_candidate_index((), identity_conflicts=(conflict,)),
         _request("bus-1"),
     )
 
     assert result.resolution_status is SourceReferenceStatus.AMBIGUOUS
-    assert result.candidates == (candidate,)
+    assert result.candidates == ()
+    assert result.identity_conflicts == (conflict,)
     assert result.resolved_ref is None
+
+
+def test_candidate_index_rejects_candidate_and_conflict_for_same_identity() -> None:
+    candidate = _candidate("bus-1")
+    conflict = ReferenceIdentityConflict(
+        case_id=CASE_A,
+        source_entity_type=SourceEntityType.BUS,
+        source_id=SourceId("bus-1"),
+        source_record_refs=(
+            "zip-member:case/02_Bus.csv#data-row=1",
+            "zip-member:case/02_Bus.csv#data-row=2",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="candidate and identity conflict"):
+        build_reference_candidate_index(
+            (candidate,), identity_conflicts=(conflict,)
+        )
 
 
 def test_candidate_lookup_is_isolated_by_case() -> None:

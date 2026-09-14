@@ -6,9 +6,9 @@
 |---|---|
 | 状态 | Draft，待字段语义确认 |
 | 映射 ID | `nanjing_csv` |
-| 映射版本 | `0.2.0` |
-| Canonical 合同 | `docs/spec/canonical_data_spec.md` `0.3.0` |
-| Source Import 基线 | `docs/spec/source_import_foundation.md` `0.1.0` |
+| 映射版本 | `0.3.0` |
+| Canonical 合同 | `docs/spec/canonical_data_spec.md` `0.4.0` |
+| Source Import 基线 | `docs/spec/source_import_foundation.md` `0.2.0` |
 | 数据审计 | `docs/spec/nanjing_source_audit.md` |
 
 本文定义南京数据 12 类 CSV 到 Canonical Model 的 Source Adapter 映射。它不定义参数补全、连接修复、OpenDSS 导出或生成规则。
@@ -20,7 +20,7 @@
 - 每个压缩包内馈线目录形成一个 `GridCase`；`source_case_key` 为目录相对路径的精确保留值。
 - 不以 `Feeder_ID` 作为唯一建 case 的依据，因为存在只有表头的 `Feeder` 文件。
 - 每条数据行必须按 `docs/spec/source_import_foundation.md` 4.1 节建立 `zip-member:<encoded-member-path>#data-row=<N>` 格式的稳定 `source_record_ref`。`N` 是不含表头的 1-based CSV 逻辑记录序号。
-- 所有由该行直接建立的实体记录使用 `record_origin=SOURCE`、`source_mapping_id=nanjing_csv` 和 `source_mapping_version=0.2.0`。
+- 所有由该行直接建立的实体记录使用 `record_origin=SOURCE`、`source_mapping_id=nanjing_csv` 和 `source_mapping_version=0.3.0`。
 
 ### 2.2 通用字段转换
 
@@ -33,7 +33,7 @@
 7. 本映射不直接填写 `Terminal.connectivity_node_ref`。在连接语义获得确认前，`connectivity_status=NOT_ASSESSED`。
 8. 科学计数法展开、疑似精度修复、模糊或近似匹配不得作为直接映射；确认后必须以 `REPAIRED` 字段级 provenance 记录。
 9. 直接复制或简单类型/枚举归一化的字段依靠 `source_record_ref + source_mapping_id + source_mapping_version` 反查，不要求逐字段物理生成 `FieldProvenance`。
-10. 重复源 ID 不得覆盖。Canonical ID 必须纳入 `source_record_ref` 进行消歧，并在 Station、Feeder、Bus 和 Equipment 上设置相应 `identity_status`。Terminal、TransformerWinding 和设备子类记录不单独计算源身份状态。
+10. 重复源 ID 不得覆盖或静默丢弃。Mapper output ID 必须纳入 `source_record_ref`；D-2-E assembly 对 identical group 只发布最小 locator 对应的 output，对 conflicting group 不发布实体，并对全部 rows 建立 accountability。Terminal、TransformerWinding 和设备子类记录不单独计算源身份状态。
 11. 源身份分组键为 `(case_id, source entity type, source_id)`。单条为 `UNIQUE`；多条时对解码后、不作 trim/类型转换的整行原始字段向量逐值比较，不包含 `source_record_ref`。全部相同时组内每条记录为 `DUPLICATE_IDENTICAL`；任一字段不同时整组为 `DUPLICATE_CONFLICT`。
 12. Station、Feeder、Bus 和各设备的 `*_ID` 是创建顶层源实体所必需的 source ID。该值缺失时不建立实体或其派生记录，按 foundation 规范保留 unmapped source record 并产生 `SOURCE_REQUIRED_VALUE_MISSING/ERROR`。
 
@@ -74,18 +74,18 @@ Source entity type 与 Canonical `EntityRef.entity_type` 的表示规则为：
 对每个引用字段，resolver 必须将表中允许的 source entity type 的候选合并后判定：
 
 1. 原文为空时，resolved ref 为 `null`，状态为 `MISSING`。
-2. 并集中只有一条字面精确命中，且目标 `identity_status=UNIQUE` 时，按上表填写 `EntityRef`，状态为 `EXACT`。
-3. 并集中命中多条，或命中目标的 `identity_status` 不是 `UNIQUE` 时，resolved ref 为 `null`，状态为 `AMBIGUOUS`。完全相同的重复行也不得任选。
-4. 原文非空但无命中，或该字段的候选集尚未确认时，resolved ref 为 `null`，状态为 `UNRESOLVED`。
+2. 并集中只有一条字面精确命中、没有 identity-conflict marker，且目标 `identity_status=UNIQUE` 时，按上表填写 `EntityRef`，状态为 `EXACT`。
+3. 并集中命中多条、命中目标的 `identity_status` 不是 `UNIQUE`，或命中一个 conflicting duplicate identity marker 时，resolved ref 为 `null`，状态为 `AMBIGUOUS`。完全相同的重复行也不得任选；conflicting group 即使没有 Canonical candidate 也不得降级为 `UNRESOLVED`。
+4. 原文非空但 candidate 与 identity-conflict marker 均无命中，或该字段的候选集尚未确认时，resolved ref 为 `null`，状态为 `UNRESOLVED`。
 5. 本 mapping 不执行科学计数法展开、近似匹配或修复，因此不产生 `NORMALIZED_CANDIDATE` 或 `CONFIRMED_REPAIR`。
 6. Terminal 对上述所有结果仍保持 `connectivity_node_ref=null` 和 `connectivity_status=NOT_ASSESSED`。
 
 ### 2.4 `GridCase.feeder_ref` 规则
 
-- 对每个 case，候选 Feeder 是已成功建立、满足 Canonical 必需字段的 Feeder 记录。因缺失 `Feeder_ID` 而进入 unmapped source records 的行不是候选。
-- 恰好一个候选且其 `identity_status=UNIQUE` 时，`feeder_ref={entity_type: FEEDER, entity_id: feeder_id}`。
-- 没有候选时，`feeder_ref=null`，产生 `GRID_CASE_FEEDER_MISSING/WARNING`。
-- 候选多于一个，或任一候选的 `identity_status` 为 `DUPLICATE_IDENTICAL`/`DUPLICATE_CONFLICT` 时，`feeder_ref=null`，产生 `GRID_CASE_FEEDER_AMBIGUOUS/ERROR`。不得按行号、名称或目录名任选。
+- 对每个 case，published Feeder 是已成功建立、满足 Canonical 必需字段并经过 D-2-E duplicate assembly 的 Feeder 记录。因缺失 `Feeder_ID` 而进入 unmapped source records 的行不是候选。
+- 恰好一个 published Feeder 且其 `identity_status=UNIQUE` 时，`feeder_ref={entity_type: FEEDER, entity_id: feeder_id}`。
+- 不存在 Feeder source identity，或 Feeder rows 全部 record-fatal 时，`feeder_ref=null`，产生 `GRID_CASE_FEEDER_MISSING/WARNING`。
+- 存在多个 unique Feeder identity、任一 identical duplicate group 或任一 conflicting duplicate group 时，`feeder_ref=null`，产生 `GRID_CASE_FEEDER_AMBIGUOUS/ERROR`。Conflict group 即使不发布 Feeder 也属于 ambiguous；不得按行号、名称或目录名任选。
 - `feeder_ref` 只是 GridCase 到 Canonical Feeder 记录的引用，不证明 Feeder 的 source bus 已形成电气连接。
 
 ### 2.5 通用枚举和量测规则
@@ -305,3 +305,10 @@ Import Complete 不要求所有引用精确解析，不要求 `connectivity_node
 4. `EarthingSwitch_State` 应继续映射为 `observed_state`，还是有资料证明其为 `normal_state`？
 5. 变压器高低压列是否总能稳定对应 1、2 号绕组和端点顺序？
 6. `SimConfig` 的 11 个键是否属于交付数据事实，还是示例/模板配置？
+
+## 7. D-2-E case assembly
+
+Station、Feeder、Bus 的 mapper-output orchestration、duplicate publication、conflict
+reference marker、issue identity/order、`GridCase.feeder_ref` 和 row accountability
+严格使用 `docs/spec/case_assembly_contract.md` `0.1.0`。该局部 result 不是 Dataset
+ImportResult，不计算或声明 Dataset ImportStatus。

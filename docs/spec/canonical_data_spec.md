@@ -5,7 +5,7 @@
 | 项目 | 值 |
 |---|---|
 | 状态 | Draft，待业务确认 |
-| 规范版本 | `0.3.0` |
+| 规范版本 | `0.4.0` |
 | 需求依据 | `docs/intent.md` |
 | 适用范围 | 与数据源、存储格式和下游消费者无关的稳定领域契约 |
 
@@ -90,7 +90,7 @@ flowchart LR
 - 所有源 ID 和引用必须按字符串读取和保存，禁止经由浮点数转换。
 - `case_id` 表示一次可独立导入和处理的算例，其派生依据由数据源映射规范定义。
 - 源 ID 可以跨算例或跨实体类型重复。源实体的逻辑键至少包含 `case_id + entity_type + source_id`。
-- 同一逻辑键对应多条源记录时，不得覆盖或静默去重。导入层必须用 `source_record_ref` 区分记录。
+- 同一逻辑键对应多条源记录时，不得覆盖或静默丢弃。导入层必须用 `source_record_ref` 区分并 account for 每条源记录。版本化 Source Adapter assembly 可以对完全相同的 duplicate rows 发布一个 Canonical representation；冲突 duplicate 不得通过任选源行建立 Canonical representation。具体规则必须由 Adapter 合同冻结。
 - 内容完全相同和内容冲突的重复记录必须分别标记；冲突在治理确认前不得合并。
 - 由单条源记录直接建立、并以 `source_id` 表达源身份的顶层实体必须具有 `identity_status`。当前范围仅为 Station、Feeder、Bus 和 Equipment。
 - Terminal、TransformerWinding 以及 Line、SwitchingDevice、Transformer、AccessPoint、Load、DER 等复用 Equipment 身份的子记录不单独定义 `identity_status`；其可追踪性由所属顶层实体和 `source_record_ref` 提供。
@@ -577,6 +577,7 @@ Operator Adapter 目前只是扩展点。Canonical Model 不为尚未提供需�
 | `docs/spec/source_import_foundation.md` | Source Import 实现基线、确定性 ID、错误分类和质量代码 |
 | `docs/spec/source_intake_contract.md` | Source Intake 输出与 Canonical Mapper 输入之间的稳定接口 |
 | `docs/spec/identity_resolution_contract.md` | 源实体分组、重复分类和不合并约束 |
+| `docs/spec/case_assembly_contract.md` | Station/Feeder/Bus mapper-output assembly、duplicate publication 与局部 row accounting |
 | `docs/spec/nanjing_source_audit.md` | 南京源数据统计、分布、异常和数据事实 |
 | `docs/spec/nanjing_mapping_spec.md` | 南京 12 类 CSV 到 Canonical Model 的 Source Adapter 映射 |
 | `docs/decisions/open_questions.md` | 需甲方或领域专家确认的问题、当前证据和安全行为 |

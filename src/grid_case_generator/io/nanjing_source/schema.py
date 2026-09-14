@@ -54,7 +54,7 @@ class SourceSchemaRegistry:
 
 NANJING_SOURCE_SCHEMA = SourceSchemaRegistry(
     mapping_id="nanjing_csv",
-    mapping_version="0.2.0",
+    mapping_version="0.3.0",
     files=(
         SourceFileSchema(
             SourceFileType.STATION,

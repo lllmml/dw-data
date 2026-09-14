@@ -5,11 +5,11 @@
 | 项目 | 值 |
 |---|---|
 | 状态 | Source Import MVP 实现基线 |
-| 规范版本 | `0.1.0` |
-| Canonical 合同 | `docs/spec/canonical_data_spec.md` `0.3.0` |
-| Source Import 基线 | `docs/spec/source_import_foundation.md` `0.1.0` |
-| Identity 合同 | `docs/spec/identity_resolution_contract.md` `0.1.1` |
-| 首个 Source Mapping | `nanjing_csv` `0.2.0` |
+| 规范版本 | `0.2.0` |
+| Canonical 合同 | `docs/spec/canonical_data_spec.md` `0.4.0` |
+| Source Import 基线 | `docs/spec/source_import_foundation.md` `0.2.0` |
+| Identity 合同 | `docs/spec/identity_resolution_contract.md` `0.2.0` |
+| 首个 Source Mapping | `nanjing_csv` `0.3.0` |
 
 本文冻结 Source Reference Resolution 的输入、候选索引、精确匹配、结果状态和
 质量事件边界。它不确认任何引用的电气连接语义，也不授权数据修复或拓扑推断。
@@ -39,7 +39,7 @@ Reference Resolution 不得：
 Intake output
 -> Identity Classification
 -> Mapper-created Canonical source entities
--> ReferenceCandidate index
+-> published ReferenceCandidate + identity-conflict index
 -> ReferenceResolutionRequest + candidate index
 -> ReferenceResolutionResult
 ```
@@ -90,7 +90,7 @@ field path。
 | `candidate_source_entity_type` | `SourceEntityType` | R | Identity Contract 中的具体 source identity type |
 | `source_id` | `SourceId` | R | 未经 normalization 的非空 source ID |
 | `source_record_ref` | string | R | candidate 源记录 locator |
-| `identity_status` | `IdentityStatus` | R | Identity Classification 已给出的状态 |
+| `identity_status` | `IdentityStatus` | R | `UNIQUE` 或 published `DUPLICATE_IDENTICAL`；conflict 使用 marker |
 | `entity_ref` | `EntityRef` | R | Mapper 已创建的 Canonical entity 引用 |
 
 Candidate 只能由已完成 mapper 的 Canonical 顶层源实体及其 source provenance
@@ -113,16 +113,32 @@ record 一致；`entity_ref` 只能引用该现有记录。Resolver 不创建或
 | `resolution_status` | `SourceReferenceStatus` | R | 本 MVP 只允许 `MISSING`、`EXACT`、`AMBIGUOUS`、`UNRESOLVED` |
 | `request` | `ReferenceResolutionRequest` | R | 原 request，逐字段保留 |
 | `candidates` | tuple[`ReferenceCandidate`, ...] | R | 本次查询得到的全部精确候选，确定性排序 |
+| `identity_conflicts` | tuple[`ReferenceIdentityConflict`, ...] | R | 命中的、因 conflicting duplicate 未发布 Canonical entity 的身份冲突 marker |
 | `resolved_ref` | `EntityRef`/null | N | 仅 `EXACT` 时允许，且必须等于唯一 candidate 的 `entity_ref` |
 
-`candidates` 是在 request 的 case、allowed types 和 raw value 下命中的完整候选集，
-不是 Resolver 挑选后的子集。MVP 不产生 `NORMALIZED_CANDIDATE` 或
+`candidates` 是在 request 的 case、allowed types 和 raw value 下命中的完整已发布
+Canonical 候选集，不是 Resolver 挑选后的子集。`identity_conflicts` 是同一 scope 下
+命中的完整 conflict marker 集；它不是 Canonical candidate，不含 `EntityRef`。
+MVP 不产生 `NORMALIZED_CANDIDATE` 或
 `CONFIRMED_REPAIR`。
 
 Result 是解析事实的独立输出。若 Adapter 将其转换为 Canonical
 `SourceReference`，必须逐字使用 request 的 raw value：`MISSING` 时
 `raw_ref=null`，其余状态时 `raw_ref=SourceId(raw_reference_value)`；status 和
 resolved ref 必须与 result 一致。
+
+### 3.4 `ReferenceIdentityConflict`
+
+| 字段 | 类型 | 必需性 | 说明 |
+|---|---|---:|---|
+| `case_id` | `CanonicalId` | R | conflicting identity 所属 case |
+| `source_entity_type` | `SourceEntityType` | R | 具体 source identity type |
+| `source_id` | `SourceId` | R | 未经 normalization 的非空 source ID |
+| `source_record_refs` | tuple[string, ...] | R | group 的全部 locator，至少两项、唯一且逐字符排序 |
+
+Conflict marker 只能由已经分类为 `DUPLICATE_CONFLICT`、且按版本化 assembly 合同
+不发布 Canonical entity 的完整 group 构建。它只保存 source-side identity evidence，
+不得伪造 Canonical ID 或 `EntityRef`。
 
 ## 4. Candidate index
 
@@ -133,8 +149,9 @@ Candidate index 的键固定为：
 ```
 
 其中 `source_entity_type` 是 Identity Contract 定义的具体 source identity type，
-不是 Canonical `EntityRef.entity_type`。索引值是该 key 下全部
-`ReferenceCandidate` 的不可变 tuple。
+不是 Canonical `EntityRef.entity_type`。索引分别保存该 key 下全部
+`ReferenceCandidate` 的不可变 tuple，以及至多一个
+`ReferenceIdentityConflict`。同一 key 不得同时存在 candidate 和 conflict marker。
 
 索引建立必须满足：
 
@@ -142,9 +159,12 @@ Candidate index 的键固定为：
 - 每个 candidate 必须保留 `identity_status` 和 source provenance；
 - candidate 必须放入与自身 `case_id`、具体 source type、`source_id` 完全一致的 key；
 - 同一 source record 不得因索引建立而 merge、覆盖或丢弃；
-- 同 key 的所有 duplicate records 都必须保留为独立 candidate；
+- Candidate builder 必须保留 assembly 已发布实体的身份状态；identical duplicate
+  representation 形成一个 `DUPLICATE_IDENTICAL` candidate，不能降级为 `UNIQUE`；
 - 不得把各具体 Equipment source types 预先折叠到 `EQUIPMENT` key；
 - 不得建立跨 case 或不含 source type 的辅助 fallback index。
+- conflicting duplicate group 不得为任一 row 建立 candidate；必须建立一个包含完整
+  locator set 的 conflict marker。
 
 处理 request 时，Resolver 只对每个 allowed type 查询：
 
@@ -152,9 +172,9 @@ Candidate index 的键固定为：
 (request.case_id, allowed_type, SourceId(request.raw_reference_value))
 ```
 
-然后取这些精确 key 对应 candidate tuple 的并集。Resolver 不得查询其他 type 或
-case，也不得因查询结果为空而扩大 scope。allowed types 为空且 raw value 非空时，
-候选集为空，结果为 `UNRESOLVED`。
+然后分别取这些精确 key 对应 candidate tuple 和 conflict marker 的并集。Resolver
+不得查询其他 type 或 case，也不得因查询结果为空而扩大 scope。allowed types 为空且
+raw value 非空时，两类命中均为空，结果为 `UNRESOLVED`。
 
 ## 5. 匹配规则
 
@@ -191,6 +211,7 @@ Mapping 特定的 invalid-literal 检查不属于 Resolver。即使 import polic
 输出不变量：
 
 - `candidates=()`；Resolver 不查询 candidate index；
+- `identity_conflicts=()`；
 - `resolved_ref=null`；
 - 转换为 Canonical `SourceReference` 时 `raw_ref=null`。
 
@@ -205,6 +226,7 @@ Mapping 特定的 invalid-literal 检查不属于 Resolver。即使 import polic
 输出不变量：
 
 - `candidates` 包含该唯一 candidate；
+- `identity_conflicts=()`；
 - `resolved_ref` 必须等于该 candidate 已有的 `entity_ref`。
 
 `EXACT` 只声明 source reference 唯一命中，不声明或暗示 connectivity 已确认。
@@ -215,10 +237,12 @@ Mapping 特定的 invalid-literal 检查不属于 Resolver。即使 import polic
 
 - 精确 candidate 集合包含多条记录；
 - 精确 candidate 集合恰好一条，但该 candidate 的 `identity_status` 不是 `UNIQUE`。
+- 精确命中至少一个 `ReferenceIdentityConflict`，包括零 Canonical candidate 的情况。
 
 输出不变量：
 
 - `candidates` 保留全部精确命中；
+- `identity_conflicts` 保留全部精确命中的 conflict markers；
 - `resolved_ref=null`；
 - 不得选取任一 candidate。
 
@@ -227,29 +251,37 @@ Mapping 特定的 invalid-literal 检查不属于 Resolver。即使 import polic
 条件必须同时满足：
 
 - `raw_reference_value != ""`；
-- 精确 candidate 集合为空。
+- 精确 candidate 集合为空；
+- 精确 identity conflict 集合为空。
 
 输出不变量：
 
 - `candidates=()`；
+- `identity_conflicts=()`；
 - `resolved_ref=null`。
 
 ## 7. Duplicate reference policy
 
-`DUPLICATE_IDENTICAL` 不代表任一 candidate 可以安全替代整个 source identity。
-Canonical ID 包含各记录自己的 `source_record_ref`，因此 duplicate records 是不同的
-Canonical entities。
+`DUPLICATE_IDENTICAL` candidate 是版本化 assembly 选出的唯一 published
+representation，但其非 `UNIQUE` identity status 禁止 resolver 将它作为已解析目标。
 
 无论 duplicate identity 的 decoded fields 是否相同：
 
 - `DUPLICATE_IDENTICAL` 必须导致引用 `AMBIGUOUS`；
-- `DUPLICATE_CONFLICT` 必须导致引用 `AMBIGUOUS`；
+- `DUPLICATE_CONFLICT` 必须通过 conflict marker 导致引用 `AMBIGUOUS`；
 - 不得自动 merge；
-- 不得选择第一条、最后一条或最小 locator；
-- 不得按 `source_record_ref`、Canonical ID、名称或输入顺序选择。
+- Resolver 不得选择第一条、最后一条或最小 locator；
+- Resolver 不得按 `source_record_ref`、Canonical ID、名称或输入顺序选择。
+
+D-2-E 在 resolver 之前按 assembly contract 选择 identical representation，不属于
+resolver 候选选择；conflicting identity 不适用该规则。
 
 即使因上游不完整而只有一个 duplicate-status candidate 进入 index，仍必须为
 `AMBIGUOUS`，不得降级为 `EXACT`。
+
+当 `DUPLICATE_CONFLICT` group 不发布 Canonical entity 时，resolver 必须通过
+`ReferenceIdentityConflict` 将精确命中判为 `AMBIGUOUS`。零 Canonical candidate
+不得使该情况退化为 `UNRESOLVED`。
 
 ## 8. DataQualityIssue 边界
 
@@ -263,7 +295,7 @@ message。Import policy / Source Adapter 根据 result status 创建质量事件
 | `AMBIGUOUS` | 是 | `SOURCE_REFERENCE_AMBIGUOUS` | `ERROR` |
 | `UNRESOLVED` | 是 | `SOURCE_REFERENCE_UNRESOLVED` | `WARNING` |
 
-南京 mapping `0.2.0` 没有 severity override，因此必须使用上表默认值。实际 issue
+南京 mapping `0.3.0` 没有 severity override，因此必须使用上表默认值。实际 issue
 必须携带 request 的 `case_id`、`owner_source_record_ref`、
 `reference_field_path` 和原始 reference value，并通过现有 ID factory 生成；这些
 职责不进入 Resolver。
@@ -294,6 +326,9 @@ Result 中 `candidates` 固定按以下 tuple 的逐项字符串值排序：
 )
 ```
 
+Result 中 `identity_conflicts` 固定按
+`(case_id, source_entity_type.value, source_id, source_record_refs)` 排序。
+
 排序只用于稳定输出，不用于挑选 candidate。Resolver 不读取时钟、随机数、文件系统
 或进程全局状态，不修改 request、candidate、index 或任何 Canonical entity。
 
@@ -308,7 +343,8 @@ Result 中 `candidates` 固定按以下 tuple 的逐项字符串值排序：
 | zero candidate | 非空原值；`UNRESOLVED`；resolved null |
 | multiple candidates | `AMBIGUOUS`；保留全部候选；不得任选 |
 | duplicate identical candidate | `DUPLICATE_IDENTICAL` 导致 `AMBIGUOUS` |
-| duplicate conflict candidate | `DUPLICATE_CONFLICT` 导致 `AMBIGUOUS` |
+| duplicate conflict candidate rejected | conflict 不得作为 Canonical candidate，必须使用 marker |
+| conflict marker without candidate | 零 Canonical candidate；仍为 `AMBIGUOUS`；保留完整 locator set |
 | cross-case isolation | 其他 case 的相同 source ID 不得命中 |
 | cross-source-type isolation | allowed types 外相同 source ID 不得命中；Equipment types 不混合 |
 | scientific notation preservation | `"001"`、`"1"`、`"1e0"` 分别查询，不 normalization |
@@ -324,7 +360,9 @@ connectivity 或 topology 状态。
 
 ```text
 build_reference_candidate_index(
-    candidates: Iterable[ReferenceCandidate]
+    candidates: Iterable[ReferenceCandidate],
+    *,
+    identity_conflicts: Iterable[ReferenceIdentityConflict] = (),
 ) -> ReferenceCandidateIndex
 
 resolve_source_reference(
@@ -333,6 +371,7 @@ resolve_source_reference(
 ) -> ReferenceResolutionResult
 ```
 
-`ReferenceCandidateIndex` 是本规范第 4 节 key 到确定性 candidate tuple 的只读表示。
+`ReferenceCandidateIndex` 是本规范第 4 节 key 到确定性 candidate tuple/conflict
+marker 的只读表示。
 这两个接口均为纯函数边界；不接收 ZIP、CSV handle、Canonical ID factory、issue
 factory、topology graph 或 connectivity model。

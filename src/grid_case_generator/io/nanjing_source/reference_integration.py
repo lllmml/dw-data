@@ -17,6 +17,7 @@ from grid_case_generator.validation.identity import SourceEntityType
 from grid_case_generator.validation.reference_resolution import (
     ReferenceCandidate,
     ReferenceCandidateIndex,
+    ReferenceIdentityConflict,
     ReferenceResolutionRequest,
     ReferenceResolutionResult,
     build_reference_candidate_index,
@@ -100,11 +101,17 @@ def reference_candidate_from_mapped_record(
 
 def build_nanjing_reference_candidate_index(
     records: Iterable[_MappedCandidateRecord],
+    *,
+    identity_conflicts: Iterable[ReferenceIdentityConflict] = (),
 ) -> ReferenceCandidateIndex:
     """Build the resolver index from successful mapper outputs only."""
 
     return build_reference_candidate_index(
-        reference_candidate_from_mapped_record(record) for record in records
+        (
+            reference_candidate_from_mapped_record(record)
+            for record in records
+        ),
+        identity_conflicts=identity_conflicts,
     )
 
 

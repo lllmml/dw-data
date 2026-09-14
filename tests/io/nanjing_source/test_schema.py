@@ -106,7 +106,7 @@ EXPECTED_HEADERS = {
 
 def test_schema_registry_is_versioned_and_exact() -> None:
     assert NANJING_SOURCE_SCHEMA.mapping_id == "nanjing_csv"
-    assert NANJING_SOURCE_SCHEMA.mapping_version == "0.2.0"
+    assert NANJING_SOURCE_SCHEMA.mapping_version == "0.3.0"
     assert len(NANJING_SOURCE_SCHEMA.files) == 12
     assert {
         file_schema.filename: file_schema.header
