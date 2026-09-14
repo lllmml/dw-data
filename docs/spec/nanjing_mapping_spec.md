@@ -259,8 +259,8 @@ Source entity type 与 Canonical `EntityRef.entity_type` 的表示规则为：
 
 | `Config_Key` | Canonical 字段 | 转换/约束 |
 |---|---|---|
-| `SimulationMode` | `simulation_profile.mode` | 原文加受控映射 |
-| `Algorithm` | `simulation_profile.solver` | 原文加受控映射 |
+| `SimulationMode` | `simulation_profile.mode` | 保留 source 原文；当前未冻结受控枚举映射，不绑定引擎行为 |
+| `Algorithm` | `simulation_profile.solver` | 保留 source 原文；当前未冻结受控枚举映射，不绑定引擎行为 |
 | `BaseFrequency` | `simulation_profile.frequency_hz` | Decimal，Hz |
 | `BaseVoltage_kV` | `simulation_profile.source_voltage_kv` | Decimal，kV |
 | `SourceBus` | `simulation_profile.source_bus_source_ref` | 保留 raw ref；`SUB_10KV` 当前未解析；不填连接节点 |
@@ -269,7 +269,7 @@ Source entity type 与 Canonical `EntityRef.entity_type` 的表示规则为：
 | `Tolerance` | `simulation_profile.tolerance` | Decimal；精确收敛语义待消费者规范确认 |
 | `MVAsc3` | `simulation_profile.mva_sc3` | Decimal，MVA |
 | `MVAsc1` | `simulation_profile.mva_sc1` | Decimal，MVA |
-| `UnitSystem` | `simulation_profile.unit_system` | 原文加受控映射 |
+| `UnitSystem` | `simulation_profile.unit_system` | 保留 source 原文；当前未冻结受控枚举映射，不绑定引擎行为 |
 | 其他键 | `simulation_profile.extensions["nanjing.<key>"]` | 原值完整保留并记录字段级来源 |
 
 ## 4. 南京 Source Adapter 的 Import Complete

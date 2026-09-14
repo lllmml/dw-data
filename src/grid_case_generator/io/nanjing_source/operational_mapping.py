@@ -74,7 +74,7 @@ def map_sim_config(rows, *, dataset_id, case_id, index):
     extensions = {}
     refs_by_row = {}
     for key, group in sorted(groups.items()):
-        field, conversion = CONFIG_FIELDS.get(key,(f'extensions.nanjing_csv:{key}','text'))
+        field, conversion = CONFIG_FIELDS.get(key,(f'extensions.nanjing.{key}','text'))
         path = f'simulation_profile.{field}'
         distinct = {dict(r.fields)['Config_Value'] for r in group}
         for raw in group:
@@ -107,7 +107,7 @@ def map_sim_config(rows, *, dataset_id, case_id, index):
         if key in CONFIG_FIELDS:
             values[field] = value
         else:
-            extensions[f'nanjing_csv:{key}'] = dict(raw.fields)['Config_Value']
+            extensions[f'nanjing.{key}'] = dict(raw.fields)['Config_Value']
         trace = _source_trace(raw.source_record_ref)
         provenance.append(FieldProvenance(**trace,
             provenance_id=IDs.field_provenance_id(ref,path,RecordOrigin.SOURCE,raw.source_record_ref,

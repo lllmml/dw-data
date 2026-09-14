@@ -25,7 +25,7 @@ def main():
             'csv_member_count':inventory.csv_member_count,'diagnostic_count':len(inventory.diagnostics)}))
         return 0
     if args.command == 'verify':
-        manifest = verify_source_artifact(args.artifact)
+        manifest = verify_source_artifact(args.artifact).manifest
         print(json.dumps({'verified':True,'import_status':manifest['import_status'],'files':len(manifest['files'])}))
         return 0
     report = import_archive(args.archive,args.output,imported_at=args.imported_at)

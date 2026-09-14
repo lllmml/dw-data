@@ -153,7 +153,7 @@ def test_config_conflict_unknown_key_and_missing_key_are_accounted():
         {'Config_Key':'','Config_Value':'retain-me'}]})
     profile = next(r for r in result.records if isinstance(r,SimulationProfile))
     assert profile.source_voltage_kv is None
-    assert profile.extensions == {'nanjing_csv:new-setting':'literal'}
+    assert profile.extensions == {'nanjing.new-setting':'literal'}
     assert len(result.accounting)==4 and len(result.unmapped_records)==1
     assert result.import_status is ImportStatus.COMPLETE
 
@@ -256,7 +256,8 @@ def test_hash_seed_does_not_change_persistent_source_artifacts(tmp_path):
     import sys
     archive=tmp_path/'source.zip'
     write_zip(archive,{'LINE':[{'Line_ID':'l','Line_FromBus':'s'}],
-        'SWITCH':[{'Switch_ID':'s'},{'Switch_ID':'s'}]})
+        'SWITCH':[{'Switch_ID':'s'},{'Switch_ID':'s'}],
+        'SIM_CONFIG':[{'Config_Key':'unknown-key','Config_Value':'original'}]})
     outputs=[]
     for seed in ('1','98765'):
         output=tmp_path/seed
@@ -264,6 +265,9 @@ def test_hash_seed_does_not_change_persistent_source_artifacts(tmp_path):
             'import-source',str(archive),'--output',str(output),'--imported-at','2026-09-14T00:00:00+00:00'],
             env=dict(os.environ,PYTHONHASHSEED=seed),text=True,capture_output=True)
         assert completed.returncode==0,completed.stderr
+        verified = subprocess.run([sys.executable,'-m','grid_case_generator.io.nanjing_source',
+            'verify',str(output)],text=True,capture_output=True)
+        assert verified.returncode == 0, verified.stderr
         outputs.append({str(p.relative_to(output)):p.read_bytes() for p in output.rglob('*') if p.is_file()})
     assert outputs[0]==outputs[1]
 
@@ -304,3 +308,89 @@ def test_e1_retains_110kv_feeder_anchor_without_creating_mv_source():
     assert feeder.source_bus_source_ref.resolved_source_ref.entity_id==buses[0].bus_id
     assert all(r.record_origin.value=='SOURCE' for r in result.records)
     assert not any(isinstance(r,Transformer) for r in result.records)
+
+
+@pytest.mark.parametrize('reader_name', ['read_source_case', 'read_source_case_details'])
+def test_verified_handle_is_bound_to_canonical_root(tmp_path, reader_name):
+    from grid_case_generator.io import source_artifacts
+    archive = tmp_path / 'source.zip'
+    write_zip(archive, {'BUS': [{'Bus_ID': 'b'}]})
+    root_a, root_b = tmp_path / 'a', tmp_path / 'b'
+    for root in (root_a, root_b):
+        report = import_archive(archive, root, imported_at='2026-09-14T00:00:00+00:00')
+    case_id = report['cases'][0]['case_id']
+    handle = verify_source_artifact(root_a)
+    assert handle.root == root_a.resolve()
+    reader = getattr(source_artifacts, reader_name)
+    assert reader(root_a, case_id, verified_artifact=handle)
+    assert reader(root_a / '..' / 'a', case_id, verified_artifact=handle)
+    with pytest.raises(ValueError, match='root'):
+        reader(root_b, case_id, verified_artifact=handle)
+    with pytest.raises(TypeError):
+        reader(root_a, case_id, verified_artifact=handle.manifest)
+    with pytest.raises(TypeError):
+        handle.manifest['files']['dataset.json']['sha256'] = 'changed'
+    alias = tmp_path / 'alias'
+    alias.symlink_to(root_a, target_is_directory=True)
+    with pytest.raises(ValueError, match='symlink'):
+        reader(alias, case_id, verified_artifact=handle)
+
+
+def test_verified_handle_trusts_unchanged_files_until_reverification(tmp_path):
+    import json
+    from grid_case_generator.models.records import Bus
+    archive = tmp_path / 'source.zip'
+    write_zip(archive, {'BUS': [{'Bus_ID': 'b', 'Bus_Name': 'before'}]})
+    root = tmp_path / 'a'
+    report = import_archive(archive, root, imported_at='2026-09-14T00:00:00+00:00')
+    case_id = report['cases'][0]['case_id']
+    handle = verify_source_artifact(root)
+    path = root / 'cases' / case_id / 'records' / 'Bus.jsonl'
+    record = json.loads(path.read_text())
+    record['name'] = 'after'
+    path.write_text(json.dumps(record) + '\n')
+    records = read_source_case(root, case_id, verified_artifact=handle)
+    assert next(r for r in records if isinstance(r, Bus)).name == 'after'
+    with pytest.raises(ValueError, match='checksum'):
+        read_source_case(root, case_id)
+
+
+def test_simconfig_text_and_extension_follow_frozen_mapping():
+    result = mapped({'SIM_CONFIG': [
+        {'Config_Key': 'SimulationMode', 'Config_Value': ' custom mode '},
+        {'Config_Key': 'Algorithm', 'Config_Value': 'unknown solver'},
+        {'Config_Key': 'UnitSystem', 'Config_Value': ' Custom units '},
+        {'Config_Key': 'Unknown.Key', 'Config_Value': ' literal '},
+    ]})
+    profile = next(r for r in result.records if isinstance(r, SimulationProfile))
+    assert (profile.mode, profile.solver, profile.unit_system) == (
+        ' custom mode ', 'unknown solver', ' Custom units ')
+    assert profile.extensions == {'nanjing.Unknown.Key': ' literal '}
+    assert any(p.field_path == 'simulation_profile.extensions.nanjing.Unknown.Key'
+               for p in result.provenance)
+
+
+def test_minimal_topology_config_declares_positive_fallback():
+    import tomllib
+    config_path = Path(__file__).parents[3] / 'configs' / 'nanjing_topology.toml'
+    config = tomllib.loads(config_path.read_text())
+    assert set(config) == {'fallback_nominal_voltage_kv'}
+    assert config['fallback_nominal_voltage_kv'] == 10.5
+    assert config['fallback_nominal_voltage_kv'] > 0
+
+
+@pytest.mark.parametrize('reader_name', ['read_source_case', 'read_source_case_details'])
+def test_handle_reader_rejects_member_symlink_after_verification(tmp_path, reader_name):
+    from grid_case_generator.io import source_artifacts
+    archive = tmp_path / 'source.zip'
+    write_zip(archive, {'BUS': [{'Bus_ID': 'b'}]})
+    root = tmp_path / 'a'
+    report = import_archive(archive, root, imported_at='2026-09-14T00:00:00+00:00')
+    case_id = report['cases'][0]['case_id']
+    handle = verify_source_artifact(root)
+    path = root / 'cases' / case_id / 'records' / 'Bus.jsonl'
+    external = tmp_path / 'external.jsonl'
+    path.rename(external)
+    path.symlink_to(external)
+    with pytest.raises(ValueError, match='symlink'):
+        getattr(source_artifacts, reader_name)(root, case_id, verified_artifact=handle)

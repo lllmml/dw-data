@@ -1,5 +1,7 @@
 """Versioned source-only artifacts with deterministic JSON and verified readers."""
 from collections import Counter, defaultdict
+from collections.abc import Mapping
+from types import MappingProxyType
 from dataclasses import dataclass, fields, is_dataclass
 from functools import lru_cache
 from decimal import Decimal
@@ -103,10 +105,41 @@ class SourceArtifactWriter:
         (self.root / 'manifest.json').write_bytes(canonical_json_bytes(value)+b'\n')
 
 
-def verify_source_artifact(root):
-    root = Path(root)
+@dataclass(frozen=True, slots=True)
+class VerifiedSourceArtifact:
+    """Root-bound verification result; files must remain unchanged after verification."""
+
+    root: Path
+    manifest: Mapping[str, object]
+
+
+def _artifact_root(root):
+    root = Path(root).absolute()
     if root.is_symlink() or any(p.is_symlink() for p in root.parents):
         raise ValueError('symlink artifact root')
+    return root.resolve(strict=True)
+
+
+def _artifact_member(root, relative):
+    path = root / str(_safe_relative(relative))
+    if path.is_symlink() or any(p.is_symlink() for p in path.parents):
+        raise ValueError('symlink artifact member')
+    return path
+
+
+def _verified_for_root(root, verified_artifact):
+    canonical_root = _artifact_root(root)
+    if verified_artifact is None:
+        return verify_source_artifact(canonical_root)
+    if not isinstance(verified_artifact, VerifiedSourceArtifact):
+        raise TypeError('verified_artifact must be VerifiedSourceArtifact')
+    if verified_artifact.root != canonical_root:
+        raise ValueError('verified artifact root does not match requested root')
+    return verified_artifact
+
+
+def verify_source_artifact(root):
+    root = _artifact_root(root)
     manifest_path = root/'manifest.json'
     if manifest_path.is_symlink():
         raise ValueError('symlink manifest')
@@ -114,9 +147,7 @@ def verify_source_artifact(root):
     if manifest['format_version'] != FORMAT_VERSION:
         raise ValueError('unsupported source artifact version')
     for relative,entry in manifest['files'].items():
-        path = root/str(_safe_relative(relative))
-        if path.is_symlink() or any(p.is_symlink() for p in path.parents):
-            raise ValueError('symlink artifact member')
+        path = _artifact_member(root, relative)
         digest = sha256()
         count = 0
         with path.open('rb') as stream:
@@ -128,7 +159,11 @@ def verify_source_artifact(root):
     observed = {str(p.relative_to(root)) for p in root.rglob('*') if p.is_file() and p != manifest_path}
     if observed != set(manifest['files']):
         raise ValueError('artifact file inventory mismatch')
-    return manifest
+    manifest['files'] = MappingProxyType({
+        name: MappingProxyType(dict(entry))
+        for name, entry in manifest['files'].items()
+    })
+    return VerifiedSourceArtifact(root, MappingProxyType(manifest))
 
 
 def _decode(value, annotation):
@@ -166,8 +201,9 @@ def _decode(value, annotation):
     raise TypeError(f'unsupported record value for {annotation}')
 
 
-def read_source_case(root, case_id, *, verified_manifest=None):
-    manifest = verified_manifest if verified_manifest is not None else verify_source_artifact(root)
+def read_source_case(root, case_id, *, verified_artifact=None):
+    verified = _verified_for_root(root, verified_artifact)
+    root, manifest = verified.root, verified.manifest
     if not isinstance(case_id,str) or not case_id.startswith('case:') or len(case_id) != 69 or any(c not in '0123456789abcdef' for c in case_id[5:]):
         raise ValueError('invalid source case ID')
     prefix = f'cases/{case_id}/records/'
@@ -176,7 +212,7 @@ def read_source_case(root, case_id, *, verified_manifest=None):
         if not relative.startswith(prefix): continue
         kind = Path(relative).stem
         if kind not in RECORD_TYPES: raise ValueError('unknown source record type')
-        with (Path(root)/relative).open() as stream:
+        with _artifact_member(root, relative).open() as stream:
             output.extend(_decode(json.loads(line),RECORD_TYPES[kind]) for line in stream)
     if not output:
         raise ValueError('case has no published records')
@@ -193,9 +229,10 @@ class SourceCaseDetails:
     unmapped_records: tuple[UnmappedSourceRecord, ...]
 
 
-def read_source_case_details(root, case_id, *, verified_manifest=None) -> SourceCaseDetails:
-    manifest = verified_manifest if verified_manifest is not None else verify_source_artifact(root)
-    records = read_source_case(root,case_id,verified_manifest=manifest)
+def read_source_case_details(root, case_id, *, verified_artifact=None) -> SourceCaseDetails:
+    verified = _verified_for_root(root, verified_artifact)
+    root, manifest = verified.root, verified.manifest
+    records = read_source_case(root,case_id,verified_artifact=verified)
     values = []
     for name,kind in (
         ('quality_issues',models.DataQualityIssue),
@@ -207,6 +244,6 @@ def read_source_case_details(root, case_id, *, verified_manifest=None) -> Source
         relative = f'cases/{case_id}/{name}.jsonl'
         if relative not in manifest['files']:
             raise ValueError('missing source case evidence file')
-        with (Path(root)/relative).open() as stream:
+        with _artifact_member(root, relative).open() as stream:
             values.append(tuple(_decode(json.loads(line),kind) for line in stream))
     return SourceCaseDetails(records,*values)

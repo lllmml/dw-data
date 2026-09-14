@@ -27,12 +27,12 @@ resolutions.jsonl 是源引用结果，绝非电气拓扑。Load/DER 表为空�
 from grid_case_generator.io.source_artifacts import verify_source_artifact, read_source_case
 
 root = 'outputs/nanjing-e1/source-import'
-manifest = verify_source_artifact(root)
+verified = verify_source_artifact(root)
 # case_id 从 import_report.json 取得；不使用 raw case path 拼接文件系统路径。
-records = read_source_case(root, case_id, verified_manifest=manifest)
+records = read_source_case(root, case_id, verified_artifact=verified)
 ```
 
-批量读时先验证一次，再复用 verified_manifest；验证后必须保持 artifact 只读。
+批量读时先验证一次，再复用 verified_artifact；验证后必须保持 artifact 只读。
 默认 read_source_case 会自行校验整个 artifact。返回 typed Canonical records，Decimal 和 enum
 恢复原类型。manifest checksum 用于完整性检测，不是抵御恶意篡改 manifest 的签名。
 
@@ -47,3 +47,14 @@ accounting 内 RawCsvRecord 仍保留原始字符串、字段顺序和 SourceRec
 
 进程中断而尚未生成 manifest 的目录是未发布的部分输出。不要手工补 manifest 或混合
 两次运行；重新选择新 output 目录执行导入。E1 未实现断点续跑。
+
+
+VerifiedSourceArtifact 保存 canonical resolved root 和只读 manifest。两个 reader 的
+verified_artifact 参数只接受这个 handle，且请求 root 必须 resolve 到同一目录；跨 root
+复用或传裸 manifest 会被拒绝。相同目录的相对/绝对路径可用，symlink 路径仍拒绝。
+API 已从 verified_manifest 改为 verified_artifact；通过 verified.manifest 查看校验清单。
+
+信任模型：handle 只记录 verify 时的校验结论，不是文件系统快照。复用 handle 不会再次
+计算 checksum；如果外部在 verify 后修改同一路径的普通文件，reader 可能读到修改后的
+内容。调用方必须保证目录在使用期间不变；不能保证时，不传 handle，让 reader 重新
+verify。即使重新 verify，也不宣称消除了校验与打开文件之间的 TOCTOU 竞争。

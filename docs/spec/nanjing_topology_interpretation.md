@@ -74,3 +74,18 @@ subgraph cases、unresolved/ambiguous/unsupported counts、exclusion reasons dis
 [namespace, kind, case_id, owning_source_entity_id, role] 的 SHA256，格式 `<kind>:<hex>`。
 kind/role 仅允许 E2 明文列举的 feeder-head、junction、switch-port 等，无时间/绝对路径/
 seed 输入；拓扑不得随采样 seed 改变。具体目标集合和端口 role 在 E2 实现测试中落实。
+
+## E2 最小 topology configuration
+
+配置文件：`configs/nanjing_topology.toml`。仅冻结配置，不在本 review-fix 实现 interpreter。
+
+| 字段 | 类型 | 默认值 | 约束与含义 |
+|---|---|---|---|
+| fallback_nominal_voltage_kv | 有限数值，kV | 10.5 | 必须 > 0；synthetic modeling default，不是 source fact |
+
+E2 读取配置后必须验证有限且 > 0，否则 fail fast。算法从此字段读取 fallback，不另设
+散落的默认数值。明确 20 kV 名称 → 20.0 kV，明确 10 kV 名称 → 10.5 kV，二者标记
+voltage_source=NAME_INFERENCE；其它名称使用配置值并标记 DEFAULT。不修改 Bus_BaseKV
+或 source SimConfig；名称/电压冲突保留明确的 conflict/unresolved 原因，不静默覆盖。
+E2 coverage report 额外报告 MV heads by NAME_INFERENCE、MV heads by DEFAULT、
+voltage-conflict / unresolved counts。当前不引入 E3 line/load/DER configuration system。

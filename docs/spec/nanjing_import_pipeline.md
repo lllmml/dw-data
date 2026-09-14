@@ -74,3 +74,9 @@ imported_at 必须为带 offset 的 ISO 8601 时间；作为显式 audit metadat
 `read_source_case_details` 还恢复 typed quality issues、FieldProvenance、ReferenceResolutionResult、
 RowAccountability 和 UnmappedSourceRecord；这些 sidecars 是 E2 的 source evidence 输入，
 无需重新打开 CSV。只读 case details 不建立或推断任何 electrical connectivity。
+
+E1 review-fix：unknown Config_Key 的 extension key 严格采用 mapping 0.3.0 的
+`nanjing.<key>`；相应 provenance field_path 为 `simulation_profile.extensions.nanjing.<key>`。
+verify_source_artifact 返回绑定 resolved root 的 VerifiedSourceArtifact；两个 reader 的
+verified_artifact 参数只接受该 handle，拒绝其它 root 或裸 manifest。复用 handle 不重算
+checksum，调用方必须保证验证后目录不变；它不是文件系统快照或 TOCTOU 防护。
