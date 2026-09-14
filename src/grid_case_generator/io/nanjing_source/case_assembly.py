@@ -66,6 +66,12 @@ _MAPPER_OCCURRENCE_KEY_BY_FIELD_PATH = {
     "station.latitude": "Station_Lat",
     "bus.base_voltage_kv": "Bus_BaseKV",
     "bus.is_source": "Bus_IsSource",
+    "bus.phases": "Bus_Phase",
+    "station.source_id": "Station_ID",
+    "bus.source_id": "Bus_ID",
+    "feeder.source_id": "Feeder_ID",
+    "bus.station_source_ref": "Bus_Station_ID",
+    "feeder.source_bus_source_ref": "Feeder_SourceBus",
 }
 
 
@@ -489,11 +495,12 @@ def assemble_station_feeder_bus_case(
         )
 
     ordered_resolutions = tuple(sorted(resolutions, key=_resolution_sort_key))
+    entity_ref_by_locator = {
+        record.source_record_ref: _entity_ref(record) for record in final_records
+    }
     resolution_index_by_ref = {
-        _entity_ref(record): index_position
+        entity_ref_by_locator[result.request.owner_source_record_ref]: index_position
         for index_position, result in enumerate(ordered_resolutions)
-        for record in final_records
-        if record.source_record_ref == result.request.owner_source_record_ref
     }
     issues = tuple(
         sorted(

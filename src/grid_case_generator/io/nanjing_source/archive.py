@@ -1,11 +1,13 @@
 """Read-only Nanjing ZIP inventory."""
 
+from collections.abc import Iterator
 from hashlib import sha256
 from pathlib import Path
 from zipfile import ZipFile
 
 from .locator import validate_zip_member_path
 from .models import (
+    RawSourceFile,
     IntakeDiagnostic,
     IntakeDiagnosticCode,
     SourceCaseInventory,
@@ -90,3 +92,25 @@ def inventory_archive(
         cases=tuple(cases),
         diagnostics=tuple(diagnostics),
     )
+
+
+def iter_raw_cases(
+    archive_path: str | Path,
+    inventory: SourceDatasetInventory,
+) -> Iterator[tuple[SourceCaseInventory, tuple[RawSourceFile, ...]]]:
+    """Intake-owned session: open the ZIP once, read each expected member once."""
+    from .csv_reader import read_raw_csv_member
+
+    with ZipFile(archive_path, mode="r") as archive:
+        for case in inventory.cases:
+            files = tuple(
+                read_raw_csv_member(
+                    archive,
+                    source_case_key=case.source_case_key,
+                    member_path=member,
+                    file_schema=NANJING_SOURCE_SCHEMA.for_type(kind),
+                )
+                for kind, member in case.members
+                if member is not None
+            )
+            yield case, files

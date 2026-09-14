@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from typing import Generic, TypeVar
 
-from grid_case_generator.models.records import Bus, Feeder, Station
+from grid_case_generator.models.records import Bus, Equipment, Feeder, Station
 from grid_case_generator.models.types import (
     EntityRef,
     Identifier,
@@ -29,7 +29,7 @@ from .schema import NANJING_SOURCE_SCHEMA, SourceFileType
 
 
 _T = TypeVar("_T", Bus, Feeder)
-_MappedCandidateRecord = Station | Feeder | Bus
+_MappedCandidateRecord = Station | Feeder | Bus | Equipment
 _MAPPING_ID = NANJING_SOURCE_SCHEMA.mapping_id
 _MAPPING_VERSION = NANJING_SOURCE_SCHEMA.mapping_version
 
@@ -77,6 +77,14 @@ def _mapped_identity(
             record.source_id,
             EntityRef(entity_type=Identifier("BUS"), entity_id=record.bus_id),
         )
+    if isinstance(record, Equipment):
+        return (
+            SourceEntityType(record.equipment_type.value),
+            record.source_id,
+            EntityRef(
+                entity_type=Identifier("EQUIPMENT"), entity_id=record.equipment_id
+            ),
+        )
     raise TypeError("unsupported mapped reference candidate record")
 
 
@@ -85,8 +93,8 @@ def reference_candidate_from_mapped_record(
 ) -> ReferenceCandidate:
     """Reuse mapper-produced identity and provenance without normalization."""
 
-    if not isinstance(record, (Station, Feeder, Bus)):
-        raise TypeError("record must be a mapped Station, Feeder, or Bus")
+    if not isinstance(record, (Station, Feeder, Bus, Equipment)):
+        raise TypeError("record must be a mapped Station, Feeder, Bus, or Equipment")
     source_entity_type, source_id, entity_ref = _mapped_identity(record)
     assert record.source_record_ref is not None
     return ReferenceCandidate(

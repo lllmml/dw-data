@@ -452,8 +452,6 @@ def map_bus(
         raise ValueError("classification decoded fields must match the raw record")
     if fields["Bus_ID"] == "" or identity.source_id != fields["Bus_ID"]:
         raise ValueError("classification source_id must match non-empty Bus_ID")
-    if fields["Bus_Phase"] != "":
-        raise ValueError("non-empty Bus_Phase mapping is not yet confirmed")
 
     source_id = identity.source_id
     bus_id = SourceImportIdFactory.bus_id(
@@ -483,6 +481,21 @@ def map_bus(
     issues = tuple(
         issue for issue in (voltage_issue, boolean_issue) if issue is not None
     )
+    if fields["Bus_Phase"] != "":
+        issues += (
+            _issue(
+                dataset_id=dataset_id,
+                case_id=identity.case_id,
+                record=record,
+                target_ref=target_ref,
+                field_path="bus.phases",
+                code=QualityIssueCode.SOURCE_ENUM_UNKNOWN,
+                observed_value=fields["Bus_Phase"],
+                occurrence_key="Bus_Phase",
+                message="source phase encoding is unconfirmed; raw text retained",
+            ),
+        )
+
     raw_station_ref = fields["Bus_Station_ID"]
     station_source_ref = SourceReference(
         raw_ref=SourceId(raw_station_ref) if raw_station_ref != "" else None,
