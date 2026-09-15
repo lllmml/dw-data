@@ -1,4 +1,21 @@
-# SERIES_SWITCH_V2 — E2.2 数据实验提案
+"""Render the review-only design proposal from measured experiment results."""
+
+
+def render_proposal(reports):
+    coverage = reports['coverage_by_strategy']['strategies']
+    risks = reports['risk_analysis']['strategies']
+    ties = reports['tie_switch_analysis']['strategies']
+    rows = []
+    for name, c in coverage.items():
+        rows.append(f"| {name} | {c['switch_projected_count']} | {c['switch_conducting_count']} | {c['switch_excluded_count']} | {c['cases_with_feeder_head']} | {c['cases_with_usable_subgraph']} | {c['reachable_transformers']} | {c['cases_with_reachable_transformers']} | {c['reachable_transformer_ratio']} |")
+    risk_rows = []
+    for name, r in risks.items():
+        s, c = r['structural'], r['conducting']
+        risk_rows.append(f"| {name} | {r['projected_semantic_unknown_count']} | {r['projected_endpoint_conflict_count']} | {s['new_cycles_count']} / {c['new_cycles_count']} | {s['isolated_new_cycles_count']} / {c['isolated_new_cycles_count']} | {c['cross_feeder_projection_count']} | {c['unsupported_path_count']} | {r['blocked_unsupported_path_count']} |")
+    base, s1, s2 = coverage['S0'], coverage['S1'], coverage['S2']
+    normal = ties['S2']['normal']['only_group_coverage']
+    tie = ties['S2']['tie']
+    return f'''# SERIES_SWITCH_V2 — E2.2 数据实验提案
 
 **PROPOSED / NOT ACCEPTED / NOT IMPLEMENTED**
 
@@ -27,29 +44,21 @@
 
 | 策略 | projected | conducting | excluded | head cases | usable cases | reachable Transformer | reachable cases | ratio |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| S0 | 0 | 0 | 271461 | 5134 | 17 | 5 | 4 | 0.000045 |
-| S1 | 60960 | 54824 | 210501 | 5134 | 2496 | 7024 | 1042 | 0.063659 |
-| S2 | 60960 | 54824 | 210501 | 5134 | 2496 | 7024 | 1042 | 0.063659 |
-| S3_A | 60960 | 54824 | 210501 | 5134 | 2496 | 7024 | 1042 | 0.063659 |
-| S3_B | 60960 | 54824 | 210501 | 5134 | 2496 | 7024 | 1042 | 0.063659 |
+{chr(10).join(rows)}
 
 ratio 分母为全部 published Transformer，不是本地 projected Transformer。
 S1/S2 已要求 known state，所以 S3_B 与 S2 等价；S3_A 额外投影 UNKNOWN 但不导通。
 
 建议普通 Switch 范围（S2 仅 normal；其它保留 S0）独立重建结果：
-usable 2486、reachable Transformer 6898、
-reachable cases 1042。
+usable {normal['cases_with_usable_subgraph']}、reachable Transformer {normal['reachable_transformers']}、
+reachable cases {normal['cases_with_reachable_transformers']}。
 这才是普通 SERIES_SWITCH_V2 建议范围的收益，不能拿全类别 S2 收益代替。
 
 ## Risk analysis
 
 | 策略 | projected unknown semantics | endpoint conflicts accepted | 新环 structural / conducting | 孤立新环 structural / conducting | conducting 跨 region switch | actual unsupported | blocked unsupported evidence |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| S0 | 0 | 0 | 0 / 0 | 0 / 0 | 0 | 0 | 0 |
-| S1 | 60880 | 0 | 0 / 0 | 0 / 0 | 0 | 0 | 6881 |
-| S2 | 60880 | 0 | 0 / 0 | 0 / 0 | 0 | 0 | 6881 |
-| S3_A | 60880 | 0 | 0 / 0 | 0 / 0 | 0 | 0 | 6881 |
-| S3_B | 60880 | 0 | 0 / 0 | 0 / 0 | 0 | 0 | 6881 |
+{chr(10).join(risk_rows)}
 
 环为确定性 fundamental cycle basis（边数含 Switch 内边，保留平行边与 self-loop）；
 不是枚举所有 simple cycles，也不是自动认定错误。degree 的角色分布与审查阈值详见
@@ -66,9 +75,9 @@ actual unsupported 是临时图实际接到不支持实体的边数；blocked ev
 
 ### Q1：S1 提升与风险
 
-相对 S0，S1 增加 7019 个可达 Transformer、
-1038 个可达 case、
-2479 个 usable case。
+相对 S0，S1 增加 {s1['reachable_transformers'] - base['reachable_transformers']} 个可达 Transformer、
+{s1['cases_with_reachable_transformers'] - base['cases_with_reachable_transformers']} 个可达 case、
+{s1['cases_with_usable_subgraph'] - base['cases_with_usable_subgraph']} 个 usable case。
 代价是接受大量语义 unknown 的结构解释，新增环与高 degree 要作为 review 证据。
 这不是对实际电气连接的确认，源事实相容性与覆盖改善是两件事。
 
@@ -80,19 +89,19 @@ actual unsupported 是临时图实际接到不支持实体的边数；blocked ev
 
 ### Q3：S2 是否更合理
 
-S2 比 S1 少 0 个可达 Transformer、
-0 个可达 case、
-0 个 usable case；
-排除 0 个有明确同侧电压矛盾的候选。
+S2 比 S1 少 {s1['reachable_transformers'] - s2['reachable_transformers']} 个可达 Transformer、
+{s1['cases_with_reachable_transformers'] - s2['cases_with_reachable_transformers']} 个可达 case、
+{s1['cases_with_usable_subgraph'] - s2['cases_with_usable_subgraph']} 个 usable case；
+排除 {risks['S2']['endpoint_conflicts_excluded_count']} 个有明确同侧电压矛盾的候选。
 推荐保留这一有证据的安全否决。若实测排除为 0，仅证明本数据无命中，
 不能声称已经降低了可量化的真实错误率，也不能因此取消安全条件。
 
 ### Q4：Tie 是否单独处理
 
-建议单独处理。S2 tie candidate 4339、projected 4339。
-从完整 S2 移除 tie 的可达 Transformer 损失 126、
-可达 case 损失 0、
-usable case 损失 10。
+建议单独处理。S2 tie candidate {tie['candidate_count']}、projected {tie['projected_count']}。
+从完整 S2 移除 tie 的可达 Transformer 损失 {tie['remove_group_loss']['reachable_transformers']}、
+可达 case 损失 {tie['remove_group_loss']['cases_with_reachable_transformers']}、
+usable case 损失 {tie['remove_group_loss']['cases_with_usable_subgraph']}。
 这些是重建图的边际差值，不是可加贡献。IsTie 不直接决定开闭状态；
 联络设备还需要独立的两侧 feeder ownership/边界语义，当前证据不能确认。
 
@@ -110,3 +119,4 @@ usable case 损失 10。
 分析使用独立 analysis-only namespace 和按源 Line ID 去重的临时 multigraph，
 不会把诊断匹配写回 resolver。产物目录独立且拒绝覆盖；没有 accepted rule 注册。
 E1 冻结、E2-v1 不变，Q-CONN-001 / Q-TRANSFORMER-001 仍 OPEN；不进入 E3。
+'''
