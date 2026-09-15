@@ -33,6 +33,6 @@
 
 ## 当前状态
 
-已完成：Canonical foundation、Source import foundation，以及南京 ZIP inventory、12 类 CSV schema registry、raw CSV 无损读取和 `source_record_ref` 追踪。
+已完成：Canonical foundation、Source import foundation、南京 raw intake、E1 Source Import MVP（含 mapper 与可校验 typed reload），以及 E2 derived topology interpreter、reachability 和持久化 coverage artifact。E2 全量覆盖结果等待用户 review。
 
-未完成：CSV → Canonical mapper、topology projection、data completion、OpenDSS generation、QSTS 和 operator adapters。除非任务明确要求且相应规范已确认，不实现这些能力。
+未完成：E3 data completion、OpenDSS generation、QSTS 和 operator adapters。E2 review 通过且用户明确授权前，不进入 E3；后续能力仍须相应规范已确认。

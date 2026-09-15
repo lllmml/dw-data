@@ -1,6 +1,6 @@
 # 南京派生拓扑合同
 
-版本：`nanjing-derived-topology-v1 / 1.0.0`。状态：用户冻结的 E0 规则；E2 尚未实现。
+版本：`nanjing-derived-topology-v1 / 1.0.0`。状态：用户冻结的 E0 规则；E2 已实现，等待全量覆盖报告 review。
 
 ## 边界
 
@@ -77,7 +77,7 @@ seed 输入；拓扑不得随采样 seed 改变。具体目标集合和端口 ro
 
 ## E2 最小 topology configuration
 
-配置文件：`configs/nanjing_topology.toml`。仅冻结配置，不在本 review-fix 实现 interpreter。
+配置文件：`configs/nanjing_topology.toml`。E2 已实现配置加载与 fail-fast 校验。
 
 | 字段 | 类型 | 默认值 | 约束与含义 |
 |---|---|---|---|
@@ -89,3 +89,63 @@ voltage_source=NAME_INFERENCE；其它名称使用配置值并标记 DEFAULT。�
 或 source SimConfig；名称/电压冲突保留明确的 conflict/unresolved 原因，不静默覆盖。
 E2 coverage report 额外报告 MV heads by NAME_INFERENCE、MV heads by DEFAULT、
 voltage-conflict / unresolved counts。当前不引入 E3 line/load/DER configuration system。
+
+## E2 implementation contract
+
+Derived ID kind/role pairs are closed: `feeder-head/mv`, `junction/bus`,
+`switch-port/in`, `switch-port/out`, `switch/series`, `transformer-mv/mv`,
+`line/connection`. Ownership is the existing Feeder, Bus or Equipment ID.
+All derived nodes have a positive finite Decimal voltage in kV; branches contain
+existing derived endpoint IDs and a conducting boolean. Transformer attachments
+are MV nodes only. Source references retain their original EntityRef types.
+Configuration rejects unknown keys (including seed), booleans and nonpositive or
+nonfinite numbers. Explicit naming uses case directory basename and Feeder.name,
+case insensitive standalone numeric `10/20` followed by optional whitespace and
+`kV`; simultaneous 10 and 20 evidence excludes the head with NAME_VOLTAGE_CONFLICT.
+10 and 10.5 source voltages are compatible with derived 10.5; other explicit
+positive Bus voltages must match. Invalid explicit voltage evidence is excluded.
+Upstream source Bus voltage is provenance only and exempt from MV comparison.
+SimConfig voltage disagreements are reported separately and never rewritten.
+
+Supporting locators are lexicographically ordered and deduplicated, including all
+accountability rows for every participating entity and all incident source rows.
+Explicit Switch/Transformer endpoint values are conservatively excluded because
+compatibility semantics are unconfirmed. Malformed Line evidence prevents device
+degree certification. Distinct incident lines are counted by raw Line_ID, with
+repeated/missing identities excluded rather than selecting a representative.
+
+Usable means a valid synthetic head and at least one accepted conducting Line
+reachable from it. A reachable transformer is an independent measure; neither
+measure declares OpenDSS Ready. Rings are retained. Missing anchors do not prevent
+local structural projections, but no node is source-reachable without a head.
+
+### Persisted derived records
+
+| Record | Required fields | Nullable fields / semantics |
+|---|---|---|
+| ElectricalNode | node_id, closed DerivedRole, source_entity_ref, nominal_voltage_kv, voltage_source | none; voltage in kV |
+| ElectricalBranch | branch_id, closed DerivedRole, source_entity_ref, from_node_id, to_node_id, conducting | none; both endpoints refer to derived nodes |
+| ElectricalTopology | case_id, nodes, branches, reachable_node_ids, reachable_transformer_ids | feeder_head_id may be null; all collections ordered tuples |
+| TopologyCaseResult | topology, projections, coverage | none |
+| TopologyCoverage | case_id, feeder_anchor_status, usable_subgraph, has_reachable_transformer, counts, projection_status_counts, exclusion_reasons, rule_counts | source_case_key preserves source null; nominal_voltage_kv and voltage_source null on conflicting names |
+
+Projection fields remain as frozen above. IDs are strings from the independent factory,
+not Canonical source identities. Persisted enums use their exact values; Decimal uses
+canonical JSON strings. Collections have deterministic order; derived-target tuples use
+semantic port order. Supporting locators use lexical ordering only for serialization,
+never to choose connectivity.
+
+Unpublished conflicting/rejected source identity groups use the existing GridCase as
+source_entity_ref and retain every raw locator; no fake source EntityRef is created.
+Line source-row, published-entity, unpublished-row/group and accepted/excluded-published
+counts remain separate. Switch/Transformer/AccessPoint candidates include unpublished
+identity groups; source-row and published counts are reported independently. Device
+rule counts exclude repeated Line endpoint mappings; global projection/reason counts
+include every mapping. BUS/STATION counts are per endpoint. Closed/open/unknown counts
+refer only to projected switches. E1 canonical-invalid cases remain in the audit.
+
+Voltage-bearing projections and voltage audits also retain the feeder-anchor evidence
+that determined derived voltage; node-local evidence alone is insufficient when the
+voltage came from Feeder.name. The input artifact, config snapshot and rule versions
+are bound together by the E2 manifest. Reload validates graph endpoints, target IDs,
+reachable Transformer subset and the usable/reachable report flags.
