@@ -8,7 +8,10 @@
 - Source import foundation：导入边界、错误分类、质量与 provenance 合同；
 - Nanjing raw intake：南京 ZIP inventory、12 类 CSV schema registry、raw CSV 无损读取和 `source_record_ref` 追踪；
 - E1 Source Import MVP：CSV → Canonical mapping、source artifact 校验与 typed reload；
-- E2 Derived Topology：独立规则投影、source-side reachability、版本化 artifact 与 coverage report（等待 E2 review）。
+- E2 Derived Topology：独立规则投影、source-side reachability、版本化 artifact 与 coverage report；
+- E2.3-A evidence foundation completed：可复现的拓扑恢复证据、readiness 与候选反事实分析；accepted topology 保持不变。
+
+E2.3-A 运行方法见 [recovery evidence guide](docs/guides/nanjing_topology_recovery.md)。下一 review 为 E2.3-D synthetic topology completion contract；不自动进入 B/C 或 E3。
 
 运行方法见 [E2 guide](docs/guides/nanjing_topology_interpretation.md)，验收见 [E2 handoff](docs/handoff/2026-09-15-e2-topology.md)。
 

@@ -33,6 +33,8 @@
 
 ## 当前状态
 
-已完成：Canonical foundation、Source import foundation、南京 raw intake、E1 Source Import MVP（含 mapper 与可校验 typed reload），以及 E2 derived topology interpreter、reachability 和持久化 coverage artifact。E2 全量覆盖结果等待用户 review。
+已完成：Canonical foundation、Source import foundation、南京 raw intake、E1 Source Import MVP（含 mapper 与可校验 typed reload），以及 E2 derived topology interpreter、reachability 和持久化 coverage artifact。E2.3-A evidence foundation completed：全量 failure evidence、readiness 和候选 counterfactual artifact；不改变 accepted topology。
+
+下一重大 review：E2.3-D Synthetic Topology Completion Contract。B/C 须单独 review；E2.3-A 不授权 synthetic topology implementation。
 
 未完成：E3 data completion、OpenDSS generation、QSTS 和 operator adapters。E2 review 通过且用户明确授权前，不进入 E3；后续能力仍须相应规范已确认。

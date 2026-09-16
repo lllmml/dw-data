@@ -14,3 +14,9 @@ E0 DoD：规则和证据、排除策略、覆盖指标齐全，Q-CONN/Q-TRANSFOR
 E1 DoD：12 类文件、每条已读行和非空值有归宿；源 identity/reference/Decimal 不变；
 source connectivity 不提升；ImportStatus 独立于 quality；产物可恢复且 checksum 可验证；
 测试通过、提交后停止。README/AGENTS 不把待 review Slice 标成已完成。
+
+## E2.3-A 后续 review 顺序
+
+E2.3-A 仅完成 topology recovery evidence/readiness foundation，不改变 frozen v1 或接受 S2。
+下一重大 review 为 E2.3-D Synthetic Topology Completion Contract；不自动进入 B/C 实现。
+候选反事实不是已批准规则；synthetic topology、E3、OpenDSS 仍需相应合同与明确授权。

@@ -1,0 +1,24 @@
+"""Closed analysis classifications; none changes Canonical or accepted topology."""
+from enum import StrEnum
+
+
+class EvidenceClass(StrEnum):
+    SOURCE_CONFIRMED = 'SOURCE_CONFIRMED'
+    RULE_INFERRED = 'RULE_INFERRED'
+    RULE_GENERATED = 'RULE_GENERATED'
+    UNRESOLVED = 'UNRESOLVED'
+
+
+class TargetCoverage(StrEnum):
+    FULL = 'FULL'
+    PARTIAL = 'PARTIAL'
+    FAILED = 'FAILED'
+    NO_SOURCE_TARGET = 'NO_SOURCE_TARGET'
+
+
+class RecoveryReadiness(StrEnum):
+    SOURCE_EVIDENCE_SUFFICIENT = 'SOURCE_EVIDENCE_SUFFICIENT'
+    NEEDS_RULE_REVIEW = 'NEEDS_RULE_REVIEW'
+    NEEDS_SYNTHETIC_COMPLETION = 'NEEDS_SYNTHETIC_COMPLETION'
+    ROLE_UNDETERMINED = 'ROLE_UNDETERMINED'
+    BLOCKED_BY_CONFLICT = 'BLOCKED_BY_CONFLICT'
