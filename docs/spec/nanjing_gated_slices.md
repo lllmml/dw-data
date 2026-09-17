@@ -30,3 +30,15 @@ eligibility/prohibition/readiness、全量 mutually-exclusive action cohorts、�
 D1 不生成或 apply synthetic node/connection/device，不接受 S2，不修改 accepted topology
 或 frozen v1。Synthetic topology implementation 仍未开始；B/C、D2、E3、OpenDSS 均须
 对应 review 和明确授权。完成 D1 全量验收和独立提交后 STOP，不自动进入 D2。
+
+## E2.3-D2 完成后的边界
+
+用户明确授权 D2 proposal-only，D1 的运行状态 whole-case veto 仅在 D2 被替换为
+hard contradiction / operating constraint / modeling gap 三类。D1 artifact 保留历史语义。
+D2 新增现有 Transformer attachment、受业务确认约束的新 Transformer/LV proposal，
+独立 structural/electrical-scope validation 与 physical/conducting counterfactual coverage。
+业务输入默认未确认；不默认给 zero-Transformer Feeder 创建设备；自由布局 junction/backbone
+仍缺少可执行规则。详见 [D2 contract](nanjing_synthetic_topology_proposals.md)。
+
+D2 交付后 STOP review。提案保持 RULE_GENERATED 与显式 assumptions，不修改 accepted
+或 frozen topology，不接受 S2，不进入 APPROVED/APPLIED、E3、OpenDSS、QSTS。

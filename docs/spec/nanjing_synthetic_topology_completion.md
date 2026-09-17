@@ -182,3 +182,10 @@ immutability. Full data reproduction must be byte identical. All primary counts 
 5,134; B role cohorts sum to 1,713, regardless of primary conflict precedence.
 Full tests, compile/static, all input/output verifiers, immutable accepted/frozen/raw,
 independent commit and handoff. D1 completion does not authorize D2, E3 or OpenDSS.
+
+## D2 superseding scope
+
+The separately authorized [D2 proposal-only contract](nanjing_synthetic_topology_proposals.md)
+reclassifies D1 whole-case operating-state vetoes and permits explicit engineering
+assumptions for derived proposals. This D1 specification and its artifacts retain their
+historical interpretation. D2 does not accept S2, apply proposals or authorize E3.

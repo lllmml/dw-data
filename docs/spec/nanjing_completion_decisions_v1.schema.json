@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "nanjing_completion_decisions_v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "decision_version",
+    "input_manifest_sha256",
+    "decisions"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "nanjing_completion_decisions_v1"
+    },
+    "decision_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "input_manifest_sha256": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "d1"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "d1": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "case_id",
+          "feeder_id",
+          "decision_version",
+          "role",
+          "transformer_required",
+          "synthetic_transformer_allowed",
+          "synthetic_backbone_allowed",
+          "nominal_voltage_kv",
+          "lv_voltage_kv",
+          "transformer_count",
+          "demand_basis",
+          "attachment_node_id",
+          "confirmation_ref",
+          "comment"
+        ],
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "feeder_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "decision_version": {
+            "type": "string",
+            "minLength": 1
+          },
+          "role": {
+            "enum": [
+              "UNKNOWN",
+              "DISTRIBUTION_WITH_TRANSFORMER",
+              "NO_TRANSFORMER_REQUIRED"
+            ]
+          },
+          "transformer_required": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "synthetic_transformer_allowed": {
+            "type": "boolean"
+          },
+          "synthetic_backbone_allowed": {
+            "type": "boolean"
+          },
+          "nominal_voltage_kv": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Positive finite Decimal string, kV; semantic validator rejects NaN/infinity/nonpositive"
+          },
+          "lv_voltage_kv": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Positive finite Decimal string, kV; semantic validator rejects NaN/infinity/nonpositive"
+          },
+          "transformer_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "demand_basis": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attachment_node_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "confirmation_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "comment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
