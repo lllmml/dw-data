@@ -42,8 +42,11 @@ D3 按用户单独授权实现 deterministic recovery：EXACT DIRECT 普通 seri
 重算 physical/conducting coverage 与 D2 eligibility。v1/source/D2 保持不变，不整体接受 S2。
 规范见 `docs/spec/nanjing_deterministic_topology_recovery.md`，交付见 D3 handoff。
 
-下一 Gate：D3 交付 review。D2 synthetic 提案仍最多 PROPOSED/VALIDATED，未 apply。
-不自动进入 synthetic backbone、synthetic junction、zero-Transformer device generation、
+D4 按用户单独授权实现 synthetic physical backbone proposal-only，基于 accepted v2，
+仅唯一结构与唯一 Bus anchor 可自动提出 head-to-component edge；详见
+`docs/spec/nanjing_synthetic_backbone.md`。规则 2–4 的独立 placement 证据未建立，保持 review。
+下一 Gate：D4 交付 review。D2/D4 提案均未 APPROVE/APPLY，accepted v2 不变。
+不自动扩展 synthetic backbone/junction 规则，不进入 zero-Transformer device generation、
 E3、OpenDSS 或 QSTS；这些能力仍须单独明确授权。
 
 未完成：E3 data completion、OpenDSS generation、QSTS 和 operator adapters。E2 review 通过且用户明确授权前，不进入 E3；后续能力仍须相应规范已确认。

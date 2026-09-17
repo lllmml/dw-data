@@ -52,3 +52,12 @@ D2 交付后 STOP review。提案保持 RULE_GENERATED 与显式 assumptions，�
 历史 v1/source/D2 不变；不整体接受 S2，不新增 RULE_GENERATED 对象。
 D3 交付后 STOP review，不进入 synthetic backbone、zero-Transformer device generation、
 E3、OpenDSS 或 QSTS。
+
+## E2.3-D4 单独授权的 proposal-only 边界
+
+D4 以 accepted v2 为 immutable deterministic base，允许 source-constrained
+synthetic physical backbone proposal，见 [D4 contract](nanjing_synthetic_backbone.md)。
+全量 gap taxonomy、engineering anchors、双图 counterfactual、D2 eligibility 和独立
+replay 制品与 source/accepted/historical artifacts 分离。仅唯一 component/Bus
+规则自动生成；其余 placement 规则须新证据和版本。D4 后 STOP，不 APPROVE/APPLY，
+不进入 D5、E3、OpenDSS、QSTS，不生成 Transformer/LV Bus/Load/DER 或电气参数。
