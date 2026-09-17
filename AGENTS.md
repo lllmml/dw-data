@@ -45,8 +45,14 @@ D3 按用户单独授权实现 deterministic recovery：EXACT DIRECT 普通 seri
 D4 按用户单独授权实现 synthetic physical backbone proposal-only，基于 accepted v2，
 仅唯一结构与唯一 Bus anchor 可自动提出 head-to-component edge；详见
 `docs/spec/nanjing_synthetic_backbone.md`。规则 2–4 的独立 placement 证据未建立，保持 review。
-下一 Gate：D4 交付 review。D2/D4 提案均未 APPROVE/APPLY，accepted v2 不变。
-不自动扩展 synthetic backbone/junction 规则，不进入 zero-Transformer device generation、
-E3、OpenDSS 或 QSTS；这些能力仍须单独明确授权。
+D4.1 按用户单独授权实现 source-constrained placement evidence：对 137 条“有 source Line、
+无 accepted Line component”的 Feeder 建立逐 endpoint 的离散 placement evidence，在唯一且
+case-local 的结构证据下生成 proposal-only、`RULE_INFERRED` 的 engineering anchor 与 source
+Line representation，并在 `ACCEPTED_V2 + D4.1_PLACEMENT_PROPOSALS + D4_BACKBONE_REPLAY`
+组合上重放 D4 backbone；见 `docs/spec/nanjing_placement_evidence.md`。仍然 proposal-only：
+不 APPROVE、不 APPLY、不改 accepted v2、不生成 Transformer、不进入 E3/OpenDSS/QSTS。
+下一 Gate：D4.1 交付 review。D2/D4/D4.1 提案均未 APPROVE/APPLY，accepted v2 不变。
+不自动扩展 synthetic backbone/junction 规则，不处理 1,259 条 no-source-Line Feeder 的
+自由布局，不进入 zero-Transformer device generation、E3、OpenDSS 或 QSTS；这些能力仍须单独明确授权。
 
 未完成：E3 data completion、OpenDSS generation、QSTS 和 operator adapters。E2 review 通过且用户明确授权前，不进入 E3；后续能力仍须相应规范已确认。
