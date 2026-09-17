@@ -37,6 +37,13 @@
 
 E2.3-D Design Review 已通过；E2.3-D1 contract/cohort refinement 已完成：正式合同、只读 eligibility/prohibition/readiness、全量 action cohorts 与可验证 artifact。D2 已实现 proposal-only engine、版本化业务确认输入、独立 validation 和 counterfactual artifact；不等于 accepted topology completion。
 
-下一 Gate：D2 交付 review；提案最多 PROPOSED/VALIDATED，APPROVED/APPLIED 与 B/C 须单独明确授权。D2 不接受 S2，不改变 accepted/frozen topology，不授权 E3 或 OpenDSS。
+D3 按用户单独授权实现 deterministic recovery：EXACT DIRECT 普通 series Switch、
+唯一入 Line 且远端 UNBOUND 的 leaf Switch 表示；发布独立 accepted topology v2，
+重算 physical/conducting coverage 与 D2 eligibility。v1/source/D2 保持不变，不整体接受 S2。
+规范见 `docs/spec/nanjing_deterministic_topology_recovery.md`，交付见 D3 handoff。
+
+下一 Gate：D3 交付 review。D2 synthetic 提案仍最多 PROPOSED/VALIDATED，未 apply。
+不自动进入 synthetic backbone、synthetic junction、zero-Transformer device generation、
+E3、OpenDSS 或 QSTS；这些能力仍须单独明确授权。
 
 未完成：E3 data completion、OpenDSS generation、QSTS 和 operator adapters。E2 review 通过且用户明确授权前，不进入 E3；后续能力仍须相应规范已确认。

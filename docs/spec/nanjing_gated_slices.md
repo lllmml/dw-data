@@ -42,3 +42,13 @@ D2 新增现有 Transformer attachment、受业务确认约束的新 Transformer
 
 D2 交付后 STOP review。提案保持 RULE_GENERATED 与显式 assumptions，不修改 accepted
 或 frozen topology，不接受 S2，不进入 APPROVED/APPLIED、E3、OpenDSS、QSTS。
+
+## E2.3-D3 本次明确授权的边界
+
+本次 D3 定义为 Deterministic Topology Recovery & Accepted Backbone Expansion，
+取代历史 design review 中同名占位 slice 的工作范围。按
+[D3 contract](nanjing_deterministic_topology_recovery.md) 独立评审确定性规则，
+在新目录发布 accepted topology v2，重算 physical/conducting coverage 与 D2 eligibility。
+历史 v1/source/D2 不变；不整体接受 S2，不新增 RULE_GENERATED 对象。
+D3 交付后 STOP review，不进入 synthetic backbone、zero-Transformer device generation、
+E3、OpenDSS 或 QSTS。
