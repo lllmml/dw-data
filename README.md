@@ -11,7 +11,7 @@
 - E2 Derived Topology：独立规则投影、source-side reachability、版本化 artifact 与 coverage report；
 - E2.3-A evidence foundation completed：可复现的拓扑恢复证据、readiness 与候选反事实分析；accepted topology 保持不变。
 
-E2.3-A 运行方法见 [recovery evidence guide](docs/guides/nanjing_topology_recovery.md)。下一 review 为 E2.3-D synthetic topology completion contract；不自动进入 B/C 或 E3。
+E2.3-A 运行方法见 [recovery evidence guide](docs/guides/nanjing_topology_recovery.md)。E2.3-D Design Review 已通过；D1 synthetic completion contract/cohort refinement 已完成，运行与校验见 [D1 guide](docs/guides/nanjing_synthetic_completion_contract.md)。当前 synthetic eligible=0；synthetic topology implementation 仍未开始。停止等待 D1 review，不自动进入 D2、B/C、E3 或 OpenDSS。
 
 运行方法见 [E2 guide](docs/guides/nanjing_topology_interpretation.md)，验收见 [E2 handoff](docs/handoff/2026-09-15-e2-topology.md)。
 

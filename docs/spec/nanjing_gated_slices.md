@@ -20,3 +20,13 @@ source connectivity 不提升；ImportStatus 独立于 quality；产物可恢复
 E2.3-A 仅完成 topology recovery evidence/readiness foundation，不改变 frozen v1 或接受 S2。
 下一重大 review 为 E2.3-D Synthetic Topology Completion Contract；不自动进入 B/C 实现。
 候选反事实不是已批准规则；synthetic topology、E3、OpenDSS 仍需相应合同与明确授权。
+
+## E2.3-D1 完成后的边界
+
+E2.3-D Design Review 已通过。D1 完成正式 synthetic completion contract、typed
+eligibility/prohibition/readiness、全量 mutually-exclusive action cohorts、只读 artifacts
+与 verifier；依据 [D1 合同](nanjing_synthetic_topology_completion.md)。
+
+D1 不生成或 apply synthetic node/connection/device，不接受 S2，不修改 accepted topology
+或 frozen v1。Synthetic topology implementation 仍未开始；B/C、D2、E3、OpenDSS 均须
+对应 review 和明确授权。完成 D1 全量验收和独立提交后 STOP，不自动进入 D2。
