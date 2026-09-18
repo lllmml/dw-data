@@ -14,63 +14,35 @@
 
 ## 0. Contract corrections required before implementation
 
-The frozen contract contains three statements about its inputs that the real data contradicts, and one genuine ambiguity. All four were found by measurement during planning. **Do not implement around them silently.** Apply this correction block to `docs/spec/nanjing_v1_completion_export.md` as part of Slice 1's commit, then proceed.
+**Status: resolved. Do not re-apply anything from this section.**
 
-### Correction 1 — `voltage_evidence` does not exist on proposal rows
+Four mismatches between the 1.0.0 contract and the persisted evidence were found by
+measurement during planning. They were converted into an explicit contract revision
+before implementation, as required by "do not silently edit frozen semantics":
 
-Current text (in `PLACEMENT_MISSING_ENDPOINT_BUS_V1`):
+- Revision: `docs/spec/revisions/nanjing_v1_completion_export_revision_001.md`
+- Contract moved from 1.0.0 to **1.1.0**; the revision document carries the original
+  statement, observed evidence, problem, corrected rule and compatibility impact for each
+- Config moved to `policy_version` **1.1.0**; the policy schema identity is unchanged and
+  its `description` now points at the revision
+- `PLACEMENT_MISSING_ENDPOINT_BUS_V1` carries `rule_version` **1.1.0**; the other three
+  rules stay at 1.0.0 and no rule id was renamed
 
-> `Bus_BaseKV` is derived from the proposal's `voltage_evidence`;
+Summary of the four, for readers of this plan who do not open the revision:
 
-Measured: `line_component_proposals.jsonl` carries **no** `voltage_evidence` field. Its exact key set is `applied, approved, assumptions, base_graph_sha256, case_id, conducting, edge_id, endpoint_evidence_class, endpoint_values, endpoints, evidence_class, feeder_id, kind, outcome, proposal_id, reasons, rule_id, rule_version, scope, source_line_id, source_line_record_ref, source_line_ref, stage`. The field lives on `line_endpoint_evidence.jsonl` rows, joinable on `(source_line_id, endpoint_side)` and cross-checkable against `raw_endpoint_value`. Of the 815 unresolved endpoint occurrences, **all 815 carry `voltage_evidence == null`**; of the 565 distinct raw values, **565 have no non-null voltage at all**, and **0 have more than one distinct non-null voltage**.
+| # | 1.0.0 said | Corrected in 1.1.0 |
+|---|---|---|
+| 1 | `Bus_BaseKV` derived from the proposal's `voltage_evidence` — a field that does not exist on proposal rows | Joined from `line_endpoint_evidence.jsonl` on `(source_line_id, endpoint_side)`; null with `VOLTAGE_EVIDENCE_ABSENT` when absent, null with `VOLTAGE_EVIDENCE_CONFLICT` when occurrences disagree. All 815 unresolved endpoint occurrences are null |
+| 2 | `Bus_Station_ID` is the Case-local station | Filled only when the Case's `02_Bus.csv` has exactly one distinct non-empty value; otherwise null with `STATION_EVIDENCE_NOT_UNIQUE`. Measured: 495 single, 4,644 multiple, 20 none |
+| 3 | `Bus_Name`, `Bus_Phase`, `Bus_IsSource` "derived or left empty" | Null unless evidence exists; `Bus_ID` alone carries the endpoint identity the placement rule already determined. Never filled from station context |
+| 4 | `manifest['files']` inventories every delivered file, while the archive contains the manifest | Manifest excludes itself and the archive; the archive sha256 lives in the verification sidecar. No recursive hashing |
 
-Replacement text:
-
-> `Bus_BaseKV` is joined from `placement-evidence-v1-1/line_endpoint_evidence.jsonl` on
-> `(source_line_id, endpoint_side)` and cross-checked against the endpoint's
-> `raw_endpoint_value`. Measured over the 815 unresolved endpoint occurrences, every one
-> carries `voltage_evidence == null`, so every generated Bus row leaves `Bus_BaseKV`
-> empty and records the `VOLTAGE_EVIDENCE_ABSENT` assumption. A non-null voltage is
-> copied verbatim. If one `raw_endpoint_value` ever carries more than one distinct
-> non-null voltage, the field is left empty and the `VOLTAGE_EVIDENCE_CONFLICT` reason is
-> recorded; the conflict is never resolved by ordering.
-
-### Correction 2 — `Bus_Station_ID` is not a Case-local constant
-
-Current text:
-
-> `Bus_Station_ID` is the Case-local station;
-
-Measured across all 4,951 Cases that have a `02_Bus.csv`: **495 have exactly one** distinct non-empty `Bus_Station_ID`, **4,644 have more than one**, and 20 have none. There is no well-defined "the Case-local station".
-
-Replacement text:
-
-> `Bus_Station_ID` is filled only when the referring Case's `02_Bus.csv` carries exactly
-> one distinct non-empty `Bus_Station_ID`; that value is copied verbatim. Otherwise the
-> field is left empty and the `STATION_EVIDENCE_NOT_UNIQUE` reason is recorded. No
-> station is chosen by ordering, proximity or any other tie-break.
-
-### Correction 3 — the generated Bus row is thinner than the contract implies
-
-Replace `## Known limitations` item 3 with:
-
-> 3. `PLACEMENT_MISSING_ENDPOINT_BUS_V1` is the only rule that produces a row for an
->    entity that has no source row of its own. Because no voltage evidence and no
->    unambiguous station evidence exists for these endpoints, the generated rows carry
->    `Bus_ID` and four empty attributes. They are declaration completions, not modelled
->    buses, and are the highest-scrutiny object in the delivery.
-
-### Correction 4 — the archive cannot reference itself
-
-The contract lists `manifest.json` both as a member of the delivery directory and as an entry inside `nanjing-derived-v1.zip`. `manifest['files']` therefore cannot include the archive's own sha256 without circularity.
-
-Append to `## Delivery artifact`:
-
-> `manifest['files']` inventories every delivered file except `manifest.json` itself and
-> except `nanjing-derived-v1.zip`. The archive contains the full directory tree including
-> `manifest.json`, and the archive's sha256 is recorded in the delivery verification
-> sidecar and in the CLI result rather than inside the manifest. The delivery verifier's
-> inventory check is `set(manifest['files']) | {'manifest.json', 'nanjing-derived-v1.zip'}`.
+**Contract constants this plan must match.** `VERSION = '1.1.0'` for the contract and
+rule analysis; `POLICY_VERSION = '1.1.0'` as shipped in
+`configs/nanjing_completion_policy_v1.json`. `PLACEMENT_BUS_RULE_VERSION = '1.1.0'`;
+the other three rules carry `'1.0.0'`. Artifact directory names stay
+`completion-ledger-v1` and `derived-delivery-v1` because no artifact was ever published
+under 1.0.0.
 
 ---
 
@@ -136,20 +108,22 @@ audit ──┘                                       ▼                       
 | `tests/generation/test_completion_export_e2e.py` | 12 | |
 | `docs/guides/nanjing_v1_completion_export.md` | 12 | run instructions |
 
-**Modify.** `docs/spec/nanjing_v1_completion_export.md` (Section 0 corrections only), `README.md` (one line: the slice and its guide link).
+**Modify.** `README.md` (one line: the slice and its guide link). The spec is **not** modified by any slice: its 1.1.0 revision was committed separately, before this plan.
 
 ---
 
 ## 3. Slice 1 — Policy loading and validation
 
-**Goal.** A validated, immutable `CompletionPolicy` whose canonical bytes are the run's identity, plus the Section 0 contract corrections.
+**Goal.** A validated, immutable `CompletionPolicy` whose canonical bytes are the run's identity, matching the 1.1.0 contract established by revision 001.
 
 **Files.** Create `src/grid_case_generator/models/completion_export.py`, `tests/generation/test_completion_policy.py`. Modify `docs/spec/nanjing_v1_completion_export.md`.
 
 **Interfaces.**
 
 ```python
-VERSION = '1.0.0'
+VERSION = '1.1.0'
+RULE_VERSION = '1.0.0'
+PLACEMENT_BUS_RULE_VERSION = '1.1.0'
 SCHEMA = 'nanjing_completion_policy_v1'
 PASSTHROUGH_RULE = 'SOURCE_PASSTHROUGH_V1'
 RECOVERY_RULE = 'ACCEPTED_DETERMINISTIC_RECOVERY_V1'
@@ -286,7 +260,9 @@ def test_policy_bytes_ignore_input_order(tmp_path):
 - [ ] **Step 2: Run** `uv run --frozen python -m pytest tests/generation/test_completion_policy.py -v` — expect a collection error: `No module named 'grid_case_generator.models.completion_export'`.
 - [ ] **Step 3: Implement** `models/completion_export.py`. Match `models/proposals.py`: `StrEnum` from `enum`, `@dataclass(frozen=True, slots=True, kw_only=True)`, `canonical_json_bytes` imported from `grid_case_generator.io.canonical_json`.
 - [ ] **Step 4: Run** the same command — expect all PASS.
-- [ ] **Step 5: Apply the Section 0 corrections** to `docs/spec/nanjing_v1_completion_export.md`: replace the two input claims, replace Known-limitations item 3, and append the archive carve-out paragraph.
+- [ ] **Step 5: Confirm the contract revision is already in place.** `docs/spec/nanjing_v1_completion_export.md` must read `1.1.0` and link
+  `docs/spec/revisions/nanjing_v1_completion_export_revision_001.md`; `configs/nanjing_completion_policy_v1.json` must carry `policy_version` `1.1.0`. This was committed
+  separately as the contract revision, before this plan. No spec edit belongs in this slice; if a discrepancy is found, stop and raise it rather than editing frozen semantics.
 - [ ] **Step 6: Commit.**
 
 ```bash
@@ -868,7 +844,7 @@ def test_closure_cycle_terminates(ledger_fixture):
 
 ## 9. Slice 7 — `PLACEMENT_MISSING_ENDPOINT_BUS_V1` materialization
 
-**Goal.** Append one Bus row per distinct unresolved `raw_endpoint_value`, using only source-declared text, with the Section 0 rules for `Bus_BaseKV` and `Bus_Station_ID`.
+**Goal.** Append one Bus row per distinct unresolved `raw_endpoint_value`, using only source-declared text, with revision 001 §1–§3 rules for `Bus_BaseKV`, `Bus_Station_ID` and the unevidenced fields.
 
 **Files.** Extend `generation/completion_ledger.py`, `io/derived_delivery_artifacts.py`.
 
@@ -881,24 +857,26 @@ PLACEMENT_ASSUMPTIONS = ('NOT_A_NEW_LINE_DEVICE',)
 
 
 def placement_bus_records(inputs: CompletionInputs) -> tuple[dict, ...]: ...
-def render_bus_row(values: Mapping[str, str]) -> bytes: ...
+def render_bus_row(values: Mapping[str, str | None]) -> bytes: ...
 def station_value(bus_member_bytes: bytes) -> str | None: ...
 ```
 
 **Rule.** Select proposal endpoints where `anchor_origin != 'ACCEPTED_NODE'`. Group by `raw_endpoint_value`; the group is the unit, and the group's single Bus row is emitted once even when several ports or proposals share it (measured: 782 distinct generated ports carry 565 distinct values, because 217 values map to more than one port).
 
-Field derivation, none of which reads anything but the persisted evidence:
+Field values, per revision 001 §3: a field is populated only when it has explicit evidence for that endpoint, and every other field is **`None`**. No field is filled from station context, Case nominal voltage, directory naming, the feeder head, or any default.
 
 | Column | Value |
 |---|---|
-| `Bus_ID` | the group's `raw_endpoint_value` **verbatim** |
-| `Bus_Name`, `Bus_Phase`, `Bus_IsSource` | `''` |
-| `Bus_BaseKV` | the joined `endpoint_evidence[(source_line_id, endpoint_side)]['voltage_evidence']` when exactly one distinct non-null value exists across the group; `''` when all are null (record `VOLTAGE_EVIDENCE_ABSENT`) or when more than one distinct non-null value exists (record `VOLTAGE_EVIDENCE_CONFLICT`) |
-| `Bus_Station_ID` | `station_value(...)` — the single distinct non-empty `Bus_Station_ID` in the referring Case's `02_Bus.csv`, else `''` with `STATION_EVIDENCE_NOT_UNIQUE` |
+| `Bus_ID` | the group's `raw_endpoint_value` **verbatim** — the identity the placement rule already determined; never minted, never computed here |
+| `Bus_Name`, `Bus_Phase`, `Bus_IsSource` | `None` — no consumed artifact carries evidence for them |
+| `Bus_BaseKV` | the joined `endpoint_evidence[(source_line_id, endpoint_side)]['voltage_evidence']` when exactly one distinct non-null value exists across the group; `None` when every occurrence is null (reason `VOLTAGE_EVIDENCE_ABSENT`) or when more than one distinct non-null value exists (reason `VOLTAGE_EVIDENCE_CONFLICT`) |
+| `Bus_Station_ID` | `station_value(...)` — the single distinct non-empty `Bus_Station_ID` in the referring Case's `02_Bus.csv`, else `None` with reason `STATION_EVIDENCE_NOT_UNIQUE` |
+
+`None` is preserved as `null` in the ledger and the provenance sidecar, and is rendered as an **empty field** in the CSV, which is the source format's own representation of an absent value. `render_bus_row` maps `None` to `''` at the serialization boundary only.
 
 The join is cross-checked: the endpoint evidence row's `raw_endpoint_value` must equal the proposal endpoint's, else `EVIDENCE_JOIN_MISMATCH` and the record stays `UNRESOLVED`.
 
-`render_bus_row` serializes `PLACEMENT_BUS_COLUMNS` through `csv.writer(io.StringIO(newline=''), lineterminator='\r\n')` in the source header's own column order. Because every value is a digit string or empty, QUOTE_MINIMAL emits the same bytes the source format uses; the test asserts **re-parse equality** rather than byte equality against a hypothetical source row, which is the only honest assertion for a generated row.
+`render_bus_row` serializes `PLACEMENT_BUS_COLUMNS` through `csv.writer(io.StringIO(newline=''), lineterminator='\r\n')` in the source header's own column order. Because every emitted value is a digit string or empty, QUOTE_MINIMAL emits the same bytes the source format uses; the test asserts **re-parse equality** rather than byte equality against a hypothetical source row, which is the only honest assertion for a generated row.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -932,12 +910,33 @@ def test_line_csv_receives_no_new_row(delivery_fixture):
     assert after == delivery_fixture.line_member_bytes
 
 
-def test_absent_voltage_leaves_the_field_empty(ledger_fixture):
+def test_absent_voltage_is_null_not_a_substitute(ledger_fixture):
     ledger = ledger_fixture.build_placement(voltage=None)
     record, = ledger.completion_records
     assert record['confidence_class'] == 'ENGINEERING_DEFAULT'
+    assert ledger_fixture.fields(record)['Bus_BaseKV'] is None
     assert ledger_fixture.rendered(record)['Bus_BaseKV'] == ''
     assert 'VOLTAGE_EVIDENCE_ABSENT' in ledger_fixture.assumptions(record)
+
+
+def test_no_station_context_is_ever_substituted(ledger_fixture):
+    ledger = ledger_fixture.build_placement(stations=['1139'], nominal='110')
+    record, = ledger.completion_records
+    assert ledger_fixture.fields(record)['Bus_Station_ID'] == '1139'
+    assert ledger_fixture.fields(record)['Bus_BaseKV'] is None
+    assert ledger_fixture.fields(record)['Bus_Name'] is None
+    assert ledger_fixture.fields(record)['Bus_Phase'] is None
+    assert ledger_fixture.fields(record)['Bus_IsSource'] is None
+
+
+def test_a_field_without_evidence_is_null_not_derived(ledger_fixture):
+    ledger = ledger_fixture.build_placement(voltage='10.5', stations=['1139'])
+    fields = ledger_fixture.fields(ledger.completion_records[0])
+    assert fields['Bus_BaseKV'] == '10.5'
+    assert fields['Bus_Station_ID'] == '1139'
+    assert fields['Bus_Name'] is None
+    assert fields['Bus_Phase'] is None
+    assert fields['Bus_IsSource'] is None
 
 
 def test_conflicting_voltage_is_never_resolved_by_ordering(ledger_fixture):
@@ -1253,7 +1252,7 @@ def build_archive(root, *, progress=None) -> dict: ...   # {'name', 'sha256', 'e
 
 **Archive determinism.** `ZipFile(root / ARCHIVE_NAME, 'w', ZIP_DEFLATED)`, each `ZipInfo` built explicitly with `date_time = ARCHIVE_TIMESTAMP`, fixed `external_attr`, fixed `create_system`, and entries added in sorted member-path order. `ZipFile.write` must not be used: it stamps the filesystem mtime, which would make the archive non-reproducible.
 
-**Self-reference carve-out.** Implement exactly as Section 0 Correction 4 specifies: `manifest['files']` inventories every tree file except `manifest.json` and the archive; the archive sha256 is returned by `build_archive` and recorded in the sidecar and the CLI result; the verifier's inventory check is `set(manifest['files']) | {'manifest.json', ARCHIVE_NAME}`.
+**Self-reference carve-out.** Implement exactly as revision 001 §4 specifies: `manifest['files']` inventories every tree file except `manifest.json` and the archive; the archive sha256 is returned by `build_archive` and recorded in the sidecar and the CLI result; the verifier's inventory check is `set(manifest['files']) | {'manifest.json', ARCHIVE_NAME}`. No recursive hashing: the manifest never hashes the archive and the archive hash is never a manifest input.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1545,14 +1544,20 @@ def test_cli_analyze_then_verify_round_trips(tmp_path, e2e_fixture):
 | 6 | **Nondeterministic ordering** | Dict iteration, `set()` iteration, archive entry order, `os.listdir` order. | Every emitted sequence is sorted in exactly one place; the archive is built with explicit `ZipInfo` objects in sorted order; test group 1 runs the real pipeline under two hash seeds in separate processes |
 | 7 | **Per-Case archive reopening** | Reopening the 28 MB archive for every Case would multiply failure modes and dominate runtime. | `raw_member_bytes` takes a caller-owned handle and never opens the archive; `write_delivery` opens it once around the whole case loop |
 | 8 | **61,908-file manifest bloat** | `manifest['files']` lists every delivered file, following the E1 convention, producing a roughly 10–15 MB manifest. | Accepted deliberately: it is what makes the delivery independently verifiable. Recorded in the guide. If it becomes a problem the fix is a per-Case digest level, which is a contract change, not a plan improvisation |
-| 9 | **Generated Bus rows read as modelled buses** | The rows carry an ID and four empty attributes. | Section 0 Correction 3 states they are declaration completions; the report repeats it; `VOLTAGE_EVIDENCE_ABSENT` and `STATION_EVIDENCE_NOT_UNIQUE` sit on every such record |
-| 10 | **Closure walker silently truncating** | A depth bound that drops work quietly would understate the gap. | An over-deep node is yielded with `depth_exceeded=True`, never expanded, and counted in the report; test group 8 asserts it explicitly |
+| 9 | **Generated Bus rows read as modelled buses** | The rows carry an ID and five null attributes. | Revision 001 §3 states they are declaration completions; the report repeats it; `VOLTAGE_EVIDENCE_ABSENT` and `STATION_EVIDENCE_NOT_UNIQUE` sit on every such record; Slice 7's tests assert every unevidenced field is `None` at the ledger level and empty only at the serialization boundary |
+| 10 | **A context value substituted for evidence** | `Bus_BaseKV` and `Bus_Station_ID` would each be trivially fillable from station context, and 1.0.0's "derived or left empty" invited it. | Revision 001 §1–§3 forbids substitution explicitly; `station_value` returns `None` rather than a tie-break; `test_no_station_context_is_ever_substituted` and `test_a_field_without_evidence_is_null_not_derived` pin it |
+| 11 | **Closure walker silently truncating** | A depth bound that drops work quietly would understate the gap. | An over-deep node is yielded with `depth_exceeded=True`, never expanded, and counted in the report; test group 8 asserts it explicitly |
 
 ---
 
 ## 17. Definition of done
 
-1. `docs/spec/nanjing_v1_completion_export.md` carries the four Section 0 corrections.
+1. The contract revision is already committed and this plan matches it:
+   `docs/spec/nanjing_v1_completion_export.md` reads 1.1.0 and links
+   `docs/spec/revisions/nanjing_v1_completion_export_revision_001.md`,
+   `configs/nanjing_completion_policy_v1.json` carries `policy_version` `1.1.0`, and the
+   implemented constants match Section 0's constant list. No slice edits the spec, and
+   Slice 1 Step 5 verifies this rather than performing it.
 2. All twelve slices are implemented, one commit each, in the given order — Slice 3 before Slices 4–7, because the delivery depends on it.
 3. The full suite passes: the 554 pre-existing tests plus the new ones.
 4. `uv run --frozen python -m compileall -q src tests` is silent.
