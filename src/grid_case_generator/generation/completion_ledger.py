@@ -75,10 +75,10 @@ def walk_closure(seed, lookup, *, max_depth):
     ``closure_key`` before processing. A node whose depth exceeds ``max_depth``
     is reported with ``depth_exceeded`` True but never expanded.
 
-    ``lookup(key)`` must return a finite iterable of 3-tuples and must not
-    raise; any exception propagates lazily at iteration time, by design. The
-    ``max_depth`` guard likewise raises on the first iteration of the generator,
-    not at call time, consistent with that lazy-exception note.
+    ``lookup(key)`` must return a finite iterable of 3-tuples. Exceptions
+    raised by ``lookup`` propagate lazily during iteration, not at call time.
+    The ``max_depth`` guard likewise raises on the first iteration of the
+    generator, not at call time, consistent with that lazy-exception note.
     ``meta['reference']`` repeats the key today, since ``closure_key`` is
     currently the identity function. It is carried so callers need not
     re-derive the ref if the projection ever drops a field.
