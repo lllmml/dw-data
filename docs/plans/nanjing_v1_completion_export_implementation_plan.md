@@ -321,7 +321,7 @@ def record(**fields) -> dict: ...
 
 **Record shape.** Every record is a plain `dict` of `str`/`int`/`bool`/`None`/`list`/`dict` — `canonical_json_bytes` rejects floats outright, so no ratio is ever stored as a float. `record(**fields)` fills every `RECORD_KEYS` entry, defaulting the nullable ones to `None`, and computes `record_id` last as `ledger_id({k: r[k] for k in RECORD_KEYS if k not in ('record_id', 'reason')})`. `reason` is excluded from identity so refining a reason's wording does not change any `record_id`.
 
-**Emission order.** `build_ledger` returns records sorted once, here, never in the writer: `completion_records` by `(rule_id, case_id, record_id)`, `unresolved_records` by `(reason, case_id, record_id)`, `case_summary` by `case_id`.
+**Emission order.** `build_ledger` returns records sorted once, here, never in the writer: `completion_records` by `(rule_id, case_id, record_id, reason, canonical bytes)` and `unresolved_records` by `(reason, case_id, record_id, canonical bytes)`, with the leading fields coerced so a `None` never meets a `str`; the canonical-bytes tiebreak makes each order total over any canonical row shape. `case_summary` by `(case_id, canonical bytes)`.
 
 **Closure walker.** `walk_closure(seed, lookup, *, max_depth)` yields `(key, meta)` in deterministic breadth-first order, where `key = closure_key(*ref)` and `meta = {'depth': int, 'depth_exceeded': bool, 'reference': ref}`. `lookup(key)` returns an iterable of refs. Behaviour: the seed is marked visited but not yielded; every frontier is `sorted()` before expansion; a key already visited is skipped; a key whose `depth > max_depth` is **yielded with `depth_exceeded=True` and not expanded**, so the overflow is reported rather than silently dropped; iteration terminates when the frontier empties. The walker never reads a clock, a random source, or filesystem order.
 
@@ -390,8 +390,10 @@ def test_closure_is_bounded_and_reports_the_overflow():
 def test_closure_terminates_on_a_cycle_and_a_self_reference():
     assert len(keys(closure_key('case:a', 'SWITCH', 'a'),
                      chain(('a', 'b'), ('b', 'a')), 8)) == 1
+    # The seed is marked visited and never yielded, so a self-reference reaches an
+    # already-visited node and yields nothing.
     assert len(keys(closure_key('case:a', 'SWITCH', 'a'),
-                     chain(('a', 'a')), 8)) == 1
+                     chain(('a', 'a')), 8)) == 0
 
 
 def test_closure_is_independent_of_lookup_order():

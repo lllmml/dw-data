@@ -28,6 +28,7 @@ def test_shipped_v1_policy_parses_and_is_frozen():
     assert policy.materialize_tiers == ('SAME_STATION',)
     assert policy.max_reference_closure_depth == 2
     assert policy.placement_endpoint_bus is True
+    assert policy.policy_version == '1.1.0'
     with pytest.raises(FrozenInstanceError):
         policy.materialize_tiers = ('CROSS_STATION',)
 
