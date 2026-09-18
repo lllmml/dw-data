@@ -15,8 +15,8 @@ from grid_case_generator.models.proposals import positive_voltage, voltage_compa
 from grid_case_generator.analysis.deterministic_recovery import eligibility
 from grid_case_generator.validation.topology_proposals import base_hash
 
-VERSION = '1.0.0'
-RULE_VERSION = '1.0.0'
+VERSION = '1.1.0'
+RULE_VERSION = '1.1.0'
 SCOPE = 'PROPOSAL_ONLY_COUNTERFACTUAL'
 COMPOSITION = 'ACCEPTED_V2 + D4.1_PLACEMENT_PROPOSALS + D4_BACKBONE_REPLAY'
 ACCESS_RULE = 'ACCESSPOINT_ENGINEERING_ANCHOR_V1'
@@ -65,7 +65,7 @@ SWITCH_POLICY_ERRORS = ('TIE_OR_UNKNOWN_SWITCH_TYPE', 'KNOWN_SWITCH_STATE_REQUIR
 
 
 def generated_id(kind, *parts):
-    return 'd4.1-generated:' + kind + ':' + sha256(canonical_json_bytes([VERSION, *parts])).hexdigest()
+    return 'd4.1-generated:' + kind + ':' + sha256(canonical_json_bytes(['1.0.0', *parts])).hexdigest()
 
 
 def index_accounts(accounts):
@@ -317,7 +317,7 @@ class CaseEvidence:
         owner = entity_id(anchor['account'])
         common = {'case_id': self.case_id, 'feeder_id': self.feeder_id,
                   'source_entity_ref': anchor['account']['canonical_ref'], 'rule_id': anchor['rule_id'],
-                  'rule_version': RULE_VERSION, 'evidence_class': 'RULE_INFERRED',
+                  'rule_version': RULE_VERSION, 'evidence_class': 'UNRESOLVED',
                   'voltage_basis_node_id': self.c['head_id'], 'scope': SCOPE, 'stage': 'PROPOSED',
                   'approved': False, 'applied': False}
         ports = [generated_id('port', self.case_id, self.feeder_id, anchor['rule_id'], owner, role)
@@ -376,7 +376,7 @@ class CaseEvidence:
         """The counterfactual Line branches; they reuse the real source Line identity."""
         return [{'edge_id': p['edge_id'], 'case_id': self.case_id, 'feeder_id': self.feeder_id,
                  'a': p['endpoints'][0]['anchor_id'], 'b': p['endpoints'][1]['anchor_id'],
-                 'kind': 'LINE', 'conducting': True, 'evidence_class': 'RULE_INFERRED',
+                 'kind': 'LINE', 'conducting': True, 'evidence_class': 'UNRESOLVED',
                  'rule_id': p['rule_id'], 'rule_version': RULE_VERSION,
                  'source_entity_ref': p['source_line_ref'], 'proposal_id': p['proposal_id'],
                  'stage': 'PROPOSED', 'approved': False, 'applied': False, 'scope': SCOPE}
@@ -556,7 +556,7 @@ class CaseEvidence:
                 'operating_state': anchor['state'],
                 'conducting': None if anchor['state'] is None else anchor['state'] == 'CLOSED',
                 'incident_line_refs': sorted({ref for ref, _ in anchor['incident']}),
-                'degree': len(anchor['incident']), 'evidence_class': 'RULE_INFERRED',
+                'degree': len(anchor['incident']), 'evidence_class': 'UNRESOLVED',
                 'structural_status': 'PROPOSED', 'stage': 'PROPOSED', 'approved': False,
                 'applied': False, 'scope': SCOPE}
 
@@ -725,7 +725,7 @@ class CaseEvidence:
                 'endpoints': endpoints, 'reasons': sorted(reasons),
                 'edge_id': generated_id('line', self.case_id, self.feeder_id, LINE_RULE, owner),
                 'kind': 'LINE', 'conducting': True, 'rule_id': LINE_RULE,
-                'rule_version': RULE_VERSION, 'evidence_class': 'RULE_INFERRED',
+                'rule_version': RULE_VERSION, 'evidence_class': 'UNRESOLVED',
                 'stage': 'PROPOSED', 'approved': False, 'applied': False, 'scope': SCOPE,
                 'base_graph_sha256': base_hash(self.c),
                 'assumptions': ['DERIVED_PLACEMENT_REPRESENTATION', 'NOT_A_NEW_LINE_DEVICE',
@@ -742,7 +742,7 @@ class CaseEvidence:
                                            for s in (1, 2)],
                'proposal_id': proposal['proposal_id'] if proposal else None,
                'edge_id': proposal['edge_id'] if proposal else None,
-               'evidence_class': 'RULE_INFERRED' if proposal else None,
+               'evidence_class': 'UNRESOLVED' if proposal else None,
                'approved': False, 'applied': False, 'scope': SCOPE}
         if proposal:
             # The proposal stream carries the whole object, not just the decision row.
@@ -823,7 +823,7 @@ class CaseEvidence:
                                             'its electrical junction role is derived, never a source-confirmed Bus'),
                    reason_codes=list(anchor.get('reasons', [])))
         if anchor.get('rule_id') and not anchor.get('reasons'):
-            row.update(disposition='ELIGIBLE', evidence_class='RULE_INFERRED')
+            row.update(disposition='ELIGIBLE', evidence_class='UNRESOLVED')
         elif anchor.get('error') in ('ACCESSPOINT_IDENTITY_NOT_UNIQUE', 'COMPETING_ENTITY_TYPE'):
             row.update(disposition='REJECTED', reason_codes=sorted(set(row['reason_codes'])
                                                                    | {anchor['error']}))
@@ -833,7 +833,7 @@ class CaseEvidence:
         row = self._review_common(raw_id)
         anchor = self.anchors.get(raw_id, {})
         if not anchor.get('error') and not anchor.get('reasons') and anchor.get('rule_id'):
-            row.update(disposition='ELIGIBLE', evidence_class='RULE_INFERRED')
+            row.update(disposition='ELIGIBLE', evidence_class='UNRESOLVED')
         elif anchor.get('error') in ('SWITCH_IDENTITY_NOT_UNIQUE', 'SWITCH_DEGREE_NOT_UNIQUE',
                                      'SERIES_INCIDENCE_NOT_PAIRED'):
             row.update(disposition='REJECTED')

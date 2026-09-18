@@ -151,7 +151,7 @@ def test_no_device_is_generated(tmp_path):
     for name in ('placement_anchors.jsonl', 'line_component_proposals.jsonl'):
         for line in (root / name).read_text().splitlines():
             row = json.loads(line)
-            assert row.get('evidence_class') == 'RULE_INFERRED'
+            assert row.get('evidence_class') == 'UNRESOLVED'
             assert row.get('device_id') is None and not row.get('devices')
             assert row.get('transformer_key') is None
             assert row['approved'] is False and row['applied'] is False
@@ -231,3 +231,30 @@ def test_replay_cases_only_changes_the_overlay():
     overlay = {original[0]['accepted']['case_id']: {'nodes': [], 'edges': []}}
     assert list(replay_cases(iter(original), overlay, True)) == original
     assert list(replay_cases(iter(original), overlay, False)) == original
+
+
+def test_stale_provenance_artifact_rejected_without_overwrite(tmp_path):
+    root, factory = make(tmp_path)
+    path = root / 'manifest.json'
+    manifest = json.loads(path.read_text())
+    manifest['version'] = manifest['schema_version'] = manifest['rule_version'] = '1.0.0'
+    path.write_bytes(canonical_json_bytes(manifest) + b'\n')
+    before = {p.name: p.read_bytes() for p in root.iterdir()}
+    with pytest.raises(ValueError, match='stale provenance'):
+        verify_artifact(root)
+    with pytest.raises(FileExistsError):
+        write_artifact(factory, root, BINDINGS, tmp_path / 'source')
+    assert before == {p.name: p.read_bytes() for p in root.iterdir()}
+
+
+def test_rule_inferred_detail_fails_even_with_rehashed_manifest(tmp_path):
+    root, _ = make(tmp_path)
+    path = root / 'placement_anchors.jsonl'
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    rows[0]['evidence_class'] = 'RULE_INFERRED'
+    path.write_bytes(b''.join(canonical_json_bytes(r) + b'\n' for r in rows))
+    manifest = json.loads((root / 'manifest.json').read_text())
+    manifest['files'][path.name]['sha256'] = sha256(path.read_bytes()).hexdigest()
+    (root / 'manifest.json').write_bytes(canonical_json_bytes(manifest) + b'\n')
+    with pytest.raises(ValueError, match='unapproved RULE_INFERRED'):
+        verify_artifact(root)

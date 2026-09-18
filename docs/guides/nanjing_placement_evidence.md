@@ -18,7 +18,7 @@ PYTHONHASHSEED=1 .venv/bin/python -u -m grid_case_generator.analysis.placement_e
   --analysis outputs/nanjing-e2-3/deterministic-topology-recovery-v1 \
   --accepted outputs/nanjing-e2-3/accepted-topology-v2 \
   --d4 outputs/nanjing-e2-3/synthetic-backbone-proposals-v1 \
-  --output outputs/nanjing-e2-3/placement-evidence-v1
+  --output outputs/nanjing-e2-3/placement-evidence-v1-1
 ```
 
 Output must not exist. Verification uses `verify` in place of `analyze`, all the same
@@ -31,7 +31,7 @@ The D3 chain verification dominates the runtime; it re-derives all 5,159 Cases. 
 roughly a quarter of an hour per command.
 
 For independent reproduction use `PYTHONHASHSEED=999` and a new output directory ending
-in `-reproduction`. Compare all 18 files including the manifest. No timestamps, GIS,
+in `-reproduction`. Compare all 17 files including the manifest. No timestamps, GIS,
 random seeds or ordering-based selection are used; the hash seed only tests independence
 from Python hash iteration.
 
@@ -56,7 +56,7 @@ branch whose `conducting` follows the recorded state. A Line is then represented
 when every declared endpoint reaches an anchor — an accepted node or one of those
 generated ports. The Line keeps its own source identity: no second Line device exists.
 
-Every generated object is `RULE_INFERRED` and PROPOSED. An AccessPoint is never labelled
+Every generated object is `UNRESOLVED` and PROPOSED. An AccessPoint is never labelled
 `SOURCE_CONFIRMED`: the source fact is that a Line row names it; the derived claim is
 that it is a structural junction.
 

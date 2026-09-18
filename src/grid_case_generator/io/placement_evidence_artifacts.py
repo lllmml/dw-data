@@ -327,7 +327,7 @@ def verify_artifact(output, *, factory=None, source_root=None, expected_bindings
     if manifest['artifact_kind'] != SCOPE or manifest['version'] != VERSION \
             or manifest['rule_version'] != RULE_VERSION or manifest['schema_version'] != VERSION \
             or manifest['composition'] != COMPOSITION or manifest['code_sha256'] != code_hash():
-        raise ValueError('D4.1 version/code mismatch')
+        raise ValueError('D4.1 stale provenance artifact or version/code mismatch')
     if any(manifest[k] is not False for k in ('approved', 'applied', 'accepted_v2_changed',
                                               'source_changed', 'd4_artifact_changed', 'e3_ready')):
         raise ValueError('D4.1 scope violation')
@@ -340,6 +340,10 @@ def verify_artifact(output, *, factory=None, source_root=None, expected_bindings
         with (output / name).open('rb') as f:
             for line in f:
                 digest.update(line); count += 1
+                if name != 'report.md':
+                    row = json.loads(line)
+                    if row.get('approved') is False and row.get('evidence_class') == 'RULE_INFERRED':
+                        raise ValueError('D4.1 unapproved RULE_INFERRED provenance')
                 if name != 'report.md' and line != canonical_json_bytes(json.loads(line)) + b'\n':
                     raise ValueError('D4.1 noncanonical detail: ' + name)
         if manifest['files'][name] != {'sha256': digest.hexdigest(), 'record_count': count}:

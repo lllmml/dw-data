@@ -44,7 +44,7 @@ def test_one_sided_line_endpoint_is_recovered():
     assert evidence(result, 2)['placement_evidence_class'] == 'ENGINEERING_SHARED_REFERENCE_ANCHOR'
     proposal, = result['proposals']
     assert [e['anchor_origin'] for e in proposal['endpoints']] == ['ACCEPTED_NODE', LEAF_RULE]
-    assert proposal['evidence_class'] == 'RULE_INFERRED'
+    assert proposal['evidence_class'] == 'UNRESOLVED'
     assert proposal['approved'] is False and proposal['applied'] is False
     assert proposal['scope'] == SCOPE
 
@@ -69,7 +69,7 @@ def test_accesspoint_unique_incidence_becomes_engineering_anchor():
     ev, result, review = analyse(x)
     anchor, = [a for a in result['rows']['placement_anchors'] if a['rule_id'] == ACCESS_RULE]
     assert anchor['degree'] == 1 and anchor['port_roles'] == ['JUNCTION']
-    assert anchor['evidence_class'] == 'RULE_INFERRED'
+    assert anchor['evidence_class'] == 'UNRESOLVED'
     assert anchor['internal_edge_id'] is None
     assert anchor['voltage_kv'] == '10.5' and anchor['voltage_source'] == 'DERIVED_MV_DOMAIN'
     assert ev.anchors['A1']['account']['raw_record']['source_file_type'] == 'ACCESS_POINT'
@@ -83,7 +83,7 @@ def test_accesspoint_never_confirmed_as_source_bus():
                  lines=[fx.line('L1', 'A1', 'A2')])
     _, result, _ = analyse(x)
     assert len(result['rows']['placement_anchors']) == 2
-    assert {a['evidence_class'] for a in result['rows']['placement_anchors']} == {'RULE_INFERRED'}
+    assert {a['evidence_class'] for a in result['rows']['placement_anchors']} == {'UNRESOLVED'}
     assert {a['rule_id'] for a in result['rows']['placement_anchors']} == {ACCESS_RULE}
     assert all(a['internal_edge_id'] is None for a in result['rows']['placement_anchors'])
     assert result['proposals'][0]['assumptions'] == ['DERIVED_PLACEMENT_REPRESENTATION',
@@ -357,3 +357,24 @@ def test_no_hash_or_random_dependency():
                 assert not any(a.name in ('random', 'numpy', 'secrets') for a in node.names)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
                 assert node.func.id != 'hash', name
+
+
+@pytest.mark.parametrize('stream', ['nodes_out', 'edges_out', 'proposals', 'placement_anchors'])
+def test_unapproved_rule_inferred_fails_validation(stream):
+    x = fx.build(buses=[fx.bus('B1', 'j1')], switches=[fx.switch('S1')],
+                 lines=[fx.line('L1', 'B1', 'S1')])
+    ev, result, _ = analyse(x)
+    assert validate_case(x, ev)['reasons'] == []
+    objects = ev.rows[stream] if stream == 'placement_anchors' else getattr(ev, stream)
+    assert objects and all(o['evidence_class'] == 'UNRESOLVED' for o in objects)
+    objects[0]['evidence_class'] = 'RULE_INFERRED'
+    assert 'UNAPPROVED_RULE_PROVENANCE' in validate_case(x, ev)['reasons']
+
+
+def test_unresolved_objects_participate_in_counterfactual():
+    x = fx.build(buses=[fx.bus('B1', 'j1')], switches=[fx.switch('S1')],
+                 lines=[fx.line('L1', 'B1', 'S1')])
+    ev, result, _ = analyse(x)
+    assert len(result['graph_edges']) == 2
+    assert all(o['evidence_class'] == 'UNRESOLVED' for o in result['graph_edges'])
+    assert validate_case(x, ev)['structural_status'] == 'PASS'

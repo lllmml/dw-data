@@ -69,8 +69,8 @@ def validate_case(x, ev):
     for obj in [*ev.nodes_out, *ev.edges_out, *ev.rows['placement_anchors'], *ev.proposals]:
         if obj['case_id'] != c['case_id'] or obj.get('feeder_id') not in feeder_ids:
             errors.add('CROSS_CASE_CONNECTION')
-        if obj.get('evidence_class') != 'RULE_INFERRED':
-            errors.add('FALSE_SOURCE_PROVENANCE')
+        if obj.get('evidence_class') != 'UNRESOLVED':
+            errors.add('UNAPPROVED_RULE_PROVENANCE')
         if obj.get('approved') is not False or obj.get('applied') is not False:
             errors.add('INVALID_LIFECYCLE')
         if obj.get('scope') != 'PROPOSAL_ONLY_COUNTERFACTUAL':
@@ -174,8 +174,8 @@ def validate_case(x, ev):
                 errors.add('UNRESOLVED_OPEN_CUT')
     return {'case_id': c['case_id'], 'feeder_id': ev.feeder_id, 'reasons': sorted(errors),
             'structural_status': 'REJECTED' if errors else 'PASS',
-            'evidence_class': 'RULE_INFERRED', 'scope': 'PROPOSAL_ONLY_COUNTERFACTUAL',
-            'rule_version': '1.0.0', 'approved': False, 'applied': False,
+            'evidence_class': 'UNRESOLVED', 'scope': 'PROPOSAL_ONLY_COUNTERFACTUAL',
+            'rule_version': '1.1.0', 'approved': False, 'applied': False,
             'open_cuts_preserved': 'OPEN_CUT_BYPASSED' not in errors,
             'source_endpoint_text_preserved': 'SOURCE_ENDPOINT_TEXT_CHANGED' not in errors,
             'accepted_base_bound': 'STALE_ACCEPTED_BASE' not in errors,

@@ -1,4 +1,4 @@
-# E2.3-D4.1 source-constrained placement evidence / 1.0.0
+# E2.3-D4.1 source-constrained placement evidence / 1.1.0
 
 D4.1 works on immutable accepted topology v2 plus the immutable D3/D2/source chain.
 It studies the 137 D3-after `SYNTHETIC_BACKBONE_REQUIRED` Feeder that own source Line
@@ -84,7 +84,7 @@ Switch port; the D3 cohort already covers that case and it is counted separately
 
 ## Anchors and rules
 
-All generated anchors are `RULE_INFERRED` and PROPOSED. Nothing is ever marked
+All generated anchors and Line representations are `UNRESOLVED` and PROPOSED. Nothing is ever marked
 `SOURCE_CONFIRMED`: the source fact is that a Line row names an entity; the derived
 claim is that the entity is a structural junction or attachment point. Generated ids
 are `d4.1-generated:<kind>:<sha256>` over version, case, feeder, rule and semantic
@@ -201,3 +201,19 @@ unchanged. Artifacts are canonical JSON/JSONL with SHA256 inventories, no timest
 source/D3/v2 manifest bindings and rule/schema/code bindings; verification replays every
 detail and summary stream against authoritative inputs, a tampered manifest fails, and a
 separate `PYTHONHASHSEED` reproduction must be byte-identical.
+
+## 1.1.0 provenance correction
+
+The frozen recovery evidence taxonomy is unchanged. All four placement rules remain
+unapproved; structural eligibility does not approve a rule. Every proposal, generated
+port, internal branch, Line representation and eligible review uses UNRESOLVED,
+approved=false and applied=false. RULE_INFERRED is rejected for these objects.
+UNRESOLVED objects may participate in the explicitly labelled counterfactual.
+
+Artifact/schema and rule-analysis versions are 1.1.0; the semantic identity namespace
+remains 1.0.0 because connectivity and identities do not change. The new formal output
+is placement-evidence-v1-1. Historical placement-evidence-v1 is immutable and records
+a provenance bug; v1-1 supersedes its provenance interpretation, not its calculations.
+Verification rejects the historical version as stale under the current contract.
+Regression compares all detail records after removing only provenance/version fields,
+and requires byte-identical coverage and unchanged replay decisions and object IDs.
