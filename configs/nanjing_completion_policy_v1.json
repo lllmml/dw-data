@@ -1,0 +1,14 @@
+{
+  "schema_version": "nanjing_completion_policy_v1",
+  "policy_version": "1.0.0",
+  "materialize_tiers": [
+    "SAME_STATION"
+  ],
+  "enabled_rules": [
+    "ACCEPTED_DETERMINISTIC_RECOVERY_V1",
+    "CROSS_CASE_REFERENCE_COPY_V1",
+    "PLACEMENT_MISSING_ENDPOINT_BUS_V1"
+  ],
+  "max_reference_closure_depth": 2,
+  "placement_endpoint_bus": true
+}
