@@ -130,11 +130,29 @@ def test_member_path_is_validated_before_reading():
         raw_member_bytes(archive, '../escape/01_Station.csv')
 
 
-def test_the_module_never_opens_the_archive_itself():
+def test_the_module_never_opens_the_archive_or_parses_csv():
     import ast
-    source = (Path(__file__).parents[2] / 'src' / 'grid_case_generator' / 'io'
+    from pathlib import Path as _Path
+    source = (_Path(__file__).parents[2] / 'src' / 'grid_case_generator' / 'io'
               / 'source_bytes.py').read_text()
-    assert 'ZipFile(' not in source
-    assert '.open(' not in source and 'open(' not in source.replace('ZipFile(', '')
-    # It must not parse CSV either — parsing is csv_reader's job.
-    assert 'csv.reader' not in source
+    tree = ast.parse(source)
+    called = set()
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name):
+                called.add(func.id)
+            elif isinstance(func, ast.Attribute):
+                called.add(func.attr)
+        elif isinstance(node, ast.Import):
+            imported.update(a.name.split('.')[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split('.')[0])
+    # It must never open or construct an archive: the handle is caller-owned.
+    assert not (called & {'ZipFile', 'open'}), called & {'ZipFile', 'open'}
+    # It must never parse CSV: that is csv_reader's job.
+    assert 'csv' not in imported
+    assert not (called & {'reader', 'DictReader'}), called & {'reader', 'DictReader'}
+    # Reading a member is the one filesystem-ish call it is allowed to make.
+    assert 'read' in called

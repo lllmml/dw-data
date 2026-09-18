@@ -91,7 +91,7 @@ def split_raw_records(member_bytes: bytes) -> tuple[bytes, ...]:
         i += 1
 
     if in_quotes:
-        raise ValueError('unterminated quoted field')
+        raise ValueError('v1 export: unterminated quoted field')
 
     if start < n:
         records.append(member_bytes[start:])
