@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "nanjing_completion_policy_v1",
-  "description": "Completion policy for the v1 derived delivery. Contract: docs/spec/nanjing_v1_completion_export.md",
+  "description": "Completion policy for the v1 derived delivery. Contract: docs/spec/nanjing_v1_completion_export.md 1.1.0, incorporating docs/spec/revisions/nanjing_v1_completion_export_revision_001.md. The field set, enums and ranges are unchanged by that revision; only the generated-row field semantics and the delivery manifest scope changed.",
   "type": "object",
   "additionalProperties": false,
   "required": [

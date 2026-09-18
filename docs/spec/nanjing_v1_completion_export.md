@@ -1,4 +1,11 @@
-# Nanjing v1 completion and export / 1.0.0
+# Nanjing v1 completion and export / 1.1.0
+
+Revision history: 1.0.0 froze this contract. **1.1.0** incorporates
+[revision 001](revisions/nanjing_v1_completion_export_revision_001.md), which replaces
+four clauses the persisted evidence contradicts: the source of `Bus_BaseKV`, the
+`Bus_Station_ID` inference, the discretionary "derived or left empty" field rule for
+generated Bus rows, and the delivery manifest's relation to its own archive. No rule
+precondition, tier, state, confidence class, policy field or prohibition changed.
 
 This contract defines an independent completion/export layer that produces a
 deliverable v1 derived dataset from the frozen source facts plus the already
@@ -154,10 +161,40 @@ more than one port. The port count and the row count are different measures and 
 be conflated; 565 Bus rows result, and the measured value is reported rather than
 assumed.
 
-`Bus_ID` is that `raw_endpoint_value` **verbatim**. The ID is a value the source already
-declared; the rule completes the missing declaration and never mints an identifier.
-`Bus_BaseKV` is derived from the proposal's `voltage_evidence`; `Bus_Station_ID` is the
-Case-local station; `Bus_Name`, `Bus_Phase` and `Bus_IsSource` are derived or left empty.
+A generated Bus row materializes a field only when that field has explicit evidence for
+that endpoint. No attribute is filled from station context, Case nominal voltage,
+directory naming, the feeder head, or any default.
+
+`Bus_ID` carries the endpoint identity the existing placement rule already determined:
+the `raw_endpoint_value` **verbatim**. This layer consumes that identity and never mints
+or computes one; the blanket prohibition on minting identifiers still applies.
+
+`Bus_BaseKV` comes from the endpoint's own voltage evidence, joined from
+`placement-evidence-v1-1/line_endpoint_evidence.jsonl` on
+`(source_line_id, endpoint_side)` and cross-checked against the endpoint's
+`raw_endpoint_value`; a mismatch is `EVIDENCE_JOIN_MISMATCH` and leaves the record
+`UNRESOLVED`. A non-null value is copied verbatim when every occurrence contributing to
+the same `raw_endpoint_value` agrees on one distinct non-null value. When the evidence is
+absent the value is **null** with reason `VOLTAGE_EVIDENCE_ABSENT`; when occurrences
+disagree it is **null** with reason `VOLTAGE_EVIDENCE_CONFLICT` and no representative is
+selected. Measured: all 815 unresolved endpoint occurrences carry
+`voltage_evidence == null`, and none of the 565 distinct raw values has a non-null
+voltage, so every generated row leaves this field null.
+
+`Bus_Station_ID` is filled only when the referring Case's `02_Bus.csv` carries exactly
+one distinct non-empty `Bus_Station_ID`, and that value is copied verbatim. Otherwise it
+is **null** with reason `STATION_EVIDENCE_NOT_UNIQUE`. Measured over the 4,951 Cases with
+a `02_Bus.csv`: 495 have exactly one distinct non-empty value, 4,644 have more than one,
+and 20 have none. No station is chosen by ordering, proximity, name similarity or any
+other tie-break.
+
+`Bus_Name`, `Bus_Phase` and `Bus_IsSource` have no evidence in any consumed artifact and
+are **null**.
+
+In CSV materialization a null field is written as an empty field, the source format's own
+representation of an absent value; the null is preserved as `null` in the ledger and the
+provenance sidecar.
+
 `08_Line.csv` receives **no** new row: the source Line row already exists and the proposal
 is a placement representation of it, carrying `NOT_A_NEW_LINE_DEVICE`.
 
@@ -263,6 +300,16 @@ nanjing-derived-v1.zip
 `source_case_key` is preserved exactly as the source directory relative path. All 5,159
 Cases are delivered, including the 25 without a published Feeder.
 
+**Manifest scope and the archive.** `manifest['files']` inventories every delivered file
+**except** `manifest.json` itself and except `nanjing-derived-v1.zip`. The archive is
+built after the manifest is final and contains the full delivery tree including
+`manifest.json`, so the archive's sha256 is stored **externally**: in
+`outputs/nanjing-v1/derived-delivery-v1-verification.json` as `archive_sha256`, and in
+the CLI result. It is never written into the manifest. No recursive hashing is performed:
+the manifest never hashes the archive, and the archive hash is never a manifest input.
+The delivery verifier's inventory check is exactly
+`set(manifest['files']) | {'manifest.json', 'nanjing-derived-v1.zip'}`.
+
 Byte fidelity: header bytes, column order, column count, quoting and BOM are identical
 to source (`utf-8-sig`, CRLF line endings, trailing CRLF). No CSV column is added,
 renamed or reordered. Appended rows are written after the final source row using `\r\n`
@@ -326,8 +373,12 @@ level, entries sorted by path, entries exactly `data/数据/**` + `provenance/**
    Case nor within the closure bound. Such references are recorded as `UNRESOLVED` and
    are not resolved by this slice.
 3. `PLACEMENT_MISSING_ENDPOINT_BUS_V1` is the only rule that produces a row for an
-   entity that has no source row of its own. Those Bus rows carry a source-declared ID
-   but derived content, and are the highest-scrutiny object in the delivery.
+   entity that has no source row of its own. Because no voltage evidence and no
+   unambiguous station evidence exists for these endpoints, a generated row carries
+   `Bus_ID` and five null attributes. These are **declaration completions**, not modelled
+   buses, and are the highest-scrutiny object in the delivery. A consumer must not read
+   their empty fields as zero, as a measured absence of the attribute, or as an
+   implication about the bus's voltage or station.
 4. The delivery contains `PROPOSED` rows. `manifest.json` and `report.md` state
    `approved:false` prominently, and every row's `completion_status` is available in
    the sidecar, but a consumer that ignores the sidecar can still read a proposal as an
@@ -384,8 +435,19 @@ are not asserted as literals in tests.
 
 ## Versioning
 
-Contract and rule-analysis version `1.0.0`. Artifact directories `completion-ledger-v1`
-and `derived-delivery-v1`. Generated-ID namespaces `v1-completion:ledger:<sha256>` and
-`v1-completion:provenance:<sha256>` over canonical ordered UTF-8 JSON. Archive name
-`nanjing-derived-v1.zip`. A policy-only change regenerates both artifacts under the same
-version with a new `policy_sha256`; a rule change requires a version bump.
+Contract and rule-analysis version `1.1.0`, incorporating revision 001. Artifact
+directories `completion-ledger-v1` and `derived-delivery-v1` — the `-v1` suffix denotes
+the first published generation of this contract family, not the contract version, and no
+artifact was ever published under 1.0.0. Generated-ID namespaces
+`v1-completion:ledger:<sha256>` and `v1-completion:provenance:<sha256>` over canonical
+ordered UTF-8 JSON. Archive name `nanjing-derived-v1.zip`.
+
+`PLACEMENT_MISSING_ENDPOINT_BUS_V1` carries `rule_version` `1.1.0`; the other three rules
+remain at `1.0.0`. Rule ids are unchanged: the D3 precedent for renaming
+(`SERIES_EXACT_DIRECT_V1` → `_V2`) applied to a rule whose V1 had already been published
+and reviewed, which these have not.
+
+A policy-only change regenerates both artifacts under the same version with a new
+`policy_sha256`. A revision that changes a rule precondition, a tier or a prohibition is a
+major bump and then requires a rule-id rename for any rule whose published output would
+differ. See [revision 001](revisions/nanjing_v1_completion_export_revision_001.md) §5.
