@@ -1,4 +1,4 @@
-# Nanjing v1 completion and export / 1.3.0
+# Nanjing v1 completion and export / 1.4.0
 
 Revision history: 1.0.0 froze this contract. **1.1.0** incorporates
 [revision 001](revisions/nanjing_v1_completion_export_revision_001.md), which replaces
@@ -12,7 +12,11 @@ that produces that taxonomy. **1.3.0** incorporates
 the `CROSS_CASE_REFERENCE_COPY_V1` precondition list — as written it selected 7,818
 references rather than the 2,544 the contract claimed, admitting 2,993 whose voltage
 evidence is contradicted — and disambiguates the append separator. No tier, state,
-confidence class, policy field or prohibition changed in any revision.
+confidence class, policy field or prohibition changed in any revision. **1.4.0**
+incorporates [revision 004](revisions/nanjing_v1_completion_export_revision_004.md),
+which replaces the ambiguous `counts['materialized_rows']` with `counts['addition_count']`
+and `counts['appended_row_count']` — two quantities that differ by 1,068 for the v1
+`CROSS_CASE_REFERENCE_COPY_V1` cohort and must never be conflated.
 
 This contract defines an independent completion/export layer that produces a
 deliverable v1 derived dataset from the frozen source facts plus the already
@@ -266,7 +270,7 @@ evaluates the four cohort predicates against the persisted placement and backbon
 artifacts, emits one `UNRESOLVED` / `NONE` record per matching identity, and **never
 materializes anything** — it appends no CSV row, creates no entity, mints no identifier,
 and produces no object any other rule may consume as a topological input.
-`counts['materialized_rows']` is unaffected by it.
+The rule contributes to neither `counts['addition_count']` nor `counts['appended_row_count']` (see revision 004); it materializes nothing.
 
 Its records carry `rule_id = 'COHORT_TAXONOMY_V1'`, `rule_version = '1.0.0'`,
 `source_entity_type = 'FEEDER'`, `confidence_class = 'NONE'`, and
@@ -518,7 +522,7 @@ are not asserted as literals in tests.
 
 ## Versioning
 
-Contract and rule-analysis version `1.3.0`, incorporating revisions 001, 002 and 003. Artifact
+Contract and rule-analysis version `1.4.0`, incorporating revisions 001 through 004. Artifact
 directories `completion-ledger-v1` and `derived-delivery-v1` — the `-v1` suffix denotes
 the first published generation of this contract family, not the contract version, and no
 artifact was ever published under 1.0.0. Generated-ID namespaces
