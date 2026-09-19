@@ -24,8 +24,6 @@ def test_every_member_is_delivered(delivery_fixture):
     root = delivery_fixture.write()
     delivered = {str(p.relative_to(root / 'data')) for p in (root / 'data').rglob('*.csv')}
     assert delivered == {member for _, member in delivery_fixture.members}
-    for _, member_path in delivery_fixture.members:
-        assert len(list((root / 'data' / member_path).parent.iterdir())) >= 1
 
 
 def test_byte_fidelity_is_discriminating_not_parsed_equality(delivery_fixture):
@@ -181,3 +179,32 @@ def test_provenance_records_are_canonical_json(delivery_fixture):
     raw = (root / 'provenance' / 'row_provenance.jsonl').read_bytes()
     for line in raw.splitlines():
         assert line == canonical_json_bytes(json.loads(line))
+
+
+def test_member_outside_its_case_scope_is_rejected(delivery_fixture):
+    cases = list(delivery_fixture.cases)
+    case_id, case_key, members = cases[0]
+    foreign = ('数据/别的变_10kV别线999/01_Station.csv',)
+    cases[0] = (case_id, case_key, (members[0], (members[0][0], foreign[0])))
+    args = delivery_fixture.write_args()
+    args['cases'] = tuple(cases)
+    with pytest.raises(ValueError, match='case scope'):
+        write_delivery(delivery_fixture.tmp_path / 'scoped', **args)
+
+
+def test_delivery_summary_matches_the_inputs_and_the_disk(delivery_fixture):
+    root = delivery_fixture.write()
+    result = delivery_fixture.result
+    assert result['cases'] == len(delivery_fixture.cases)
+    assert result['members'] == len(delivery_fixture.members)
+    assert result['source_rows'] == delivery_fixture.source_row_count
+    provenance = (root / 'provenance' / 'row_provenance.jsonl').read_bytes().splitlines()
+    assert result['source_rows'] == len(provenance)
+
+
+def test_output_under_data_raw_is_rejected(delivery_fixture):
+    # check_output passes here (the target nests inside no input root), so this
+    # exercises the inline data/raw predicate specifically.
+    target = delivery_fixture.tmp_path / 'data' / 'raw' / 'delivery'
+    with pytest.raises(ValueError, match='data/raw'):
+        write_delivery(target, **delivery_fixture.write_args())

@@ -78,6 +78,8 @@ def write_delivery(root, *, archive_path, cases, policy, roots, progress=None):
             case_count += 1
             for _file_type, member_path in members:
                 validate_zip_member_path(member_path)
+                if not member_path.startswith(case_key + '/'):
+                    raise ValueError('v1 delivery member outside its case scope: ' + member_path)
                 filename = member_path.rsplit('/', 1)[-1]
                 member_bytes = passthrough_member(
                     archive, member_path, root / DELIVERY_DATA_DIR / case_key / filename)

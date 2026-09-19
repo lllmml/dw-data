@@ -87,34 +87,33 @@ def _ordinary_bytes(schema, rows):
     return BOM + stream.getvalue().encode('utf-8')
 
 
-def _lf_bytes(schema, rows):
-    """LF-only line endings; a re-serializing writer would emit CRLF instead."""
+def _lines(schema, rows, *, quote=False):
+    """Header plus one comma-joined string per row; `quote` applies minimal CSV quoting."""
     lines = [','.join(schema.header)]
     for row in rows:
-        lines.append(','.join(str(row.get(k, '')) for k in schema.header))
-    return BOM + ('\n'.join(lines) + '\n').encode('utf-8')
+        values = []
+        for key in schema.header:
+            value = str(row.get(key, ''))
+            if quote and (',' in value or '\n' in value or '"' in value):
+                value = '"' + value.replace('"', '""') + '"'
+            values.append(value)
+        lines.append(','.join(values))
+    return lines
+
+
+def _lf_bytes(schema, rows):
+    """LF-only line endings; a re-serializing writer would emit CRLF instead."""
+    return BOM + ('\n'.join(_lines(schema, rows)) + '\n').encode('utf-8')
 
 
 def _no_trailing_bytes(schema, rows):
     """CRLF between records but no final terminator on the last record."""
-    lines = [','.join(schema.header)]
-    for row in rows:
-        lines.append(','.join(str(row.get(k, '')) for k in schema.header))
-    return BOM + '\r\n'.join(lines).encode('utf-8')
+    return BOM + '\r\n'.join(_lines(schema, rows)).encode('utf-8')
 
 
 def _quoted_bytes(schema, rows):
     """CRLF with a quoted field holding a comma and an embedded newline."""
-    lines = [','.join(schema.header)]
-    for row in rows:
-        values = []
-        for k in schema.header:
-            value = str(row.get(k, ''))
-            if ',' in value or '\n' in value or '"' in value:
-                value = '"' + value.replace('"', '""') + '"'
-            values.append(value)
-        lines.append(','.join(values))
-    return BOM + '\r\n'.join(lines).encode('utf-8')
+    return BOM + '\r\n'.join(_lines(schema, rows, quote=True)).encode('utf-8')
 
 
 class DeliveryFixture:
@@ -145,7 +144,7 @@ class DeliveryFixture:
         kwargs.update(overrides)
         root = self.tmp_path / 'delivery'
         from grid_case_generator.io.derived_delivery_artifacts import write_delivery
-        write_delivery(root, **kwargs)
+        self.result = write_delivery(root, **kwargs)
         return root
 
 
