@@ -4,7 +4,8 @@ import json
 from zipfile import ZipFile
 
 import pytest
-from grid_case_generator.io.derived_delivery_artifacts import write_delivery
+from grid_case_generator.io.derived_delivery_artifacts import build_archive, write_delivery
+from hashlib import sha256
 import completion_fixture as cf
 
 
@@ -470,3 +471,104 @@ def test_a_plan_entry_for_an_undelivered_member_writes_nothing(delivery_fixture)
     with pytest.raises(ValueError, match='outside the delivered inventory'):
         delivery_fixture.write(bus_plan=tuple(plan))
     assert not target.exists()
+
+
+# --- delivery manifest, report and archive ---
+
+
+def test_manifest_inventories_every_file_except_itself_and_the_archive(delivery_fixture):
+    from grid_case_generator.io.derived_delivery_artifacts import ARCHIVE_NAME
+    ledger = cf.write_ledger_artifact(delivery_fixture.tmp_path)
+    root = delivery_fixture.write(ledger_root=ledger)
+    build_archive(root)
+    manifest = json.loads((root / 'manifest.json').read_text())
+    on_disk = {str(p.relative_to(root)) for p in root.rglob('*') if p.is_file()}
+    assert on_disk == set(manifest['files']) | {'manifest.json', ARCHIVE_NAME}
+    assert ARCHIVE_NAME not in manifest['files']
+
+
+def test_manifest_states_the_boundary_and_binds_its_ledger(delivery_fixture):
+    ledger = cf.write_ledger_artifact(delivery_fixture.tmp_path)
+    root = delivery_fixture.write(ledger_root=ledger)
+    manifest = json.loads((root / 'manifest.json').read_text())
+    for flag in ('approved', 'applied', 'canonical_changed', 'accepted_v2_changed',
+                 'source_changed', 'e3_ready', 'opendss_ready'):
+        assert manifest[flag] is False, flag
+    assert manifest['artifact_kind'] == 'DERIVED_DELIVERY'
+    assert manifest['ledger_manifest_sha256'] == sha256(
+        (ledger / 'manifest.json').read_bytes()).hexdigest()
+    assert manifest['cases'] == delivery_fixture.result['cases']
+    assert manifest['members'] == delivery_fixture.result['members']
+    assert manifest['appended_rows'] == delivery_fixture.result['appended_rows']
+    assert manifest['rules'], 'a rule summary is required'
+
+
+def test_delivery_carries_the_ledger_streams_verbatim(delivery_fixture):
+    ledger = cf.write_ledger_artifact(delivery_fixture.tmp_path)
+    root = delivery_fixture.write(ledger_root=ledger)
+    for name in ('completion_records.jsonl', 'unresolved_records.jsonl'):
+        assert (root / 'provenance' / name).read_bytes() == (ledger / name).read_bytes(), name
+
+
+def test_a_delivery_without_a_ledger_says_so(delivery_fixture):
+    """Silence would let an unbound delivery pass as a complete one."""
+    root = delivery_fixture.write()
+    manifest = json.loads((root / 'manifest.json').read_text())
+    assert manifest['ledger_manifest_sha256'] is None
+    assert not (root / 'provenance' / 'completion_records.jsonl').exists()
+
+
+def test_report_states_every_required_fact(delivery_fixture):
+    delivery_fixture.placement_bus()
+    root = delivery_fixture.write()
+    text = (root / 'report.md').read_text()
+    for phrase in ('approved: false', 'PROPOSED', 'SOURCE_HEAD_CONTEXT',
+                   'declaration completions', 'Q-CASE-001', 'UNRESOLVED taxonomy'):
+        assert phrase in text, phrase
+
+
+def test_archive_is_deterministic_and_sorted(delivery_fixture):
+    from grid_case_generator.io.derived_delivery_artifacts import ARCHIVE_NAME
+    root = delivery_fixture.write()
+    first = build_archive(root)
+    digest = (root / ARCHIVE_NAME).read_bytes()
+    assert first['sha256'] == sha256(digest).hexdigest()
+    assert first['entries'] == len(digest and ZipFile(root / ARCHIVE_NAME).namelist())
+    names = ZipFile(root / ARCHIVE_NAME).namelist()
+    assert sorted(names) == names
+    assert 'manifest.json' in names and 'report.md' in names
+    assert not any(n.endswith(ARCHIVE_NAME) for n in names)
+
+
+def test_archive_timestamps_are_fixed_and_csvs_match_the_tree(delivery_fixture):
+    from grid_case_generator.io.derived_delivery_artifacts import ARCHIVE_NAME
+    root = delivery_fixture.write()
+    build_archive(root)
+    with ZipFile(root / ARCHIVE_NAME) as archive:
+        assert {i.date_time for i in archive.infolist()} == {(1980, 1, 1, 0, 0, 0)}
+        names = set(archive.namelist())
+        for member in sorted(names):
+            assert archive.read(member) == (root / member).read_bytes(), member
+    on_disk = {str(p.relative_to(root)) for p in (root / 'data').rglob('*.csv')}
+    assert {n for n in names if n.endswith('.csv')} == on_disk
+
+
+def test_archive_is_byte_identical_across_a_repeat_build(delivery_fixture):
+    from grid_case_generator.io.derived_delivery_artifacts import ARCHIVE_NAME
+    root = delivery_fixture.write()
+    build_archive(root)
+    first = (root / ARCHIVE_NAME).read_bytes()
+    (root / ARCHIVE_NAME).unlink()
+    build_archive(root)
+    assert (root / ARCHIVE_NAME).read_bytes() == first
+
+
+def test_archive_hash_is_reported_not_manifested(delivery_fixture):
+    from grid_case_generator.io.derived_delivery_artifacts import ARCHIVE_NAME
+    root = delivery_fixture.write()
+    archive = build_archive(root)
+    manifest = json.loads((root / 'manifest.json').read_text())
+    assert archive['sha256'] == sha256((root / ARCHIVE_NAME).read_bytes()).hexdigest()
+    assert ARCHIVE_NAME not in manifest['files']
+    assert manifest['source_archive_sha256'] == sha256(
+        delivery_fixture.archive.read_bytes()).hexdigest()

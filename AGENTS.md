@@ -61,4 +61,6 @@ review 建议 REQUIRES_BUSINESS_CONFIRMATION，见
 不自动扩展 synthetic backbone/junction 规则，不处理 1,259 条 no-source-Line Feeder 的
 自由布局，不进入 zero-Transformer device generation、E3、OpenDSS 或 QSTS；这些能力仍须单独明确授权。
 
+v1 completion export 已完成（Slice 8–13）：completion ledger artifact、source-shaped delivery、per-row provenance、manifest/report、确定性 archive 与独立 validator 已实现，一条命令产出 `nanjing-derived-v1.zip` 并自校验；规范见 `docs/spec/nanjing_v1_completion_export.md`，运行见 `docs/guides/nanjing_v1_completion_export.md`。交付内含 `PROPOSED` 行，未 APPROVE/APPLY，未改 canonical/accepted v2/source。
+
 未完成：E3 data completion、OpenDSS generation、QSTS 和 operator adapters。E2 review 通过且用户明确授权前，不进入 E3；后续能力仍须相应规范已确认。

@@ -552,8 +552,41 @@ def _unresolved_records(inputs: CompletionInputs, cross: tuple, placement: tuple
     return cohort + cross_unresolved + placement_unresolved, overlap
 
 
+CASE_SUMMARY_KEYS = ('case_id', 'source_case_key', 'completion_status', 'rule_id', 'tier',
+                     'record_count')
+
+
+def case_summary_record(**fields) -> dict:
+    """Build one ``case_summary`` row with an exact key set."""
+    unknown = [name for name in fields if name not in CASE_SUMMARY_KEYS]
+    if unknown:
+        raise ValueError(f'unknown case summary field {unknown[0]!r}')
+    return {name: fields.get(name) for name in CASE_SUMMARY_KEYS}
+
+
 def _case_summary(completion, unresolved) -> tuple:
-    return ()
+    """Count records per Case by state, rule and tier.
+
+    One row per distinct ``(case, state, rule, tier)`` group with a positive count, so a
+    consumer can reconcile a Case's ledger population without replaying the streams. The
+    group is the contract's own triple; ``source_case_key`` rides along because every
+    other artifact in the chain identifies the Case by it and a summary that omitted it
+    would force a join back into the records.
+    """
+    groups = {}
+    for r in (*completion, *unresolved):
+        key = (r['case_id'], r['completion_status'], r['rule_id'], r['tier'])
+        if key in groups:
+            groups[key][1] += 1
+            continue
+        if r['source_case_key'] is None:
+            raise ValueError(f'v1 ledger case summary without a source case key: {key!r}')
+        groups[key] = [r['source_case_key'], 1]
+    return tuple(case_summary_record(
+        case_id=case_id, source_case_key=key, completion_status=status, rule_id=rule_id,
+        tier=tier, record_count=count)
+        for (case_id, status, rule_id, tier), (key, count) in
+        sorted(groups.items(), key=lambda item: (item[0][0], canonical_json_bytes(item[0]))))
 
 
 def build_ledger(inputs: CompletionInputs) -> Ledger:

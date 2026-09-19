@@ -7,13 +7,15 @@ terminator, and a quoted field holding a comma plus an embedded newline. Every
 byte here is synthetic; the real intake is never read.
 """
 import csv
+from hashlib import sha256
 import io
 from dataclasses import replace
 from pathlib import Path
-from zipfile import ZipFile
+from zipfile import ZipFile, ZipInfo
 
 from grid_case_generator.generation.completion_ledger import (
     PLACEMENT_BUS_COLUMNS, CompletionInputs, build_ledger, render_bus_row)
+from grid_case_generator.io.canonical_json import canonical_json_bytes
 from grid_case_generator.io.nanjing_source.locator import source_record_ref
 from grid_case_generator.io.nanjing_source.schema import NANJING_SOURCE_SCHEMA as SCHEMA
 from grid_case_generator.models.completion_export import (
@@ -255,10 +257,9 @@ def build_placement(*, ports=None, shared_raw_value=True, voltage='10.5', statio
 class DeliveryFixture:
     def __init__(self, tmp_path, archive, roots, members, cases, source_row_count,
                  feederless_key, referring_key, donor_key, lf_member, no_trailing_member,
-                 quoted_member, policy):
+                 quoted_member, policy, placement):
         self.tmp_path = tmp_path
         self.archive = archive
-        self.roots = roots
         self.members = members
         self.cases = cases
         self.source_row_count = source_row_count
@@ -269,6 +270,8 @@ class DeliveryFixture:
         self.no_trailing_member = no_trailing_member
         self.quoted_member = quoted_member
         self.policy = policy
+        self.roots = roots
+        self.placement = placement
         self.append_plan = ()
         self.bus_plan = ()
         self.raw_endpoint_value = None
@@ -356,15 +359,11 @@ def build(tmp_path):
     archive = tmp_path / 'source.zip'
     source_root = tmp_path / 'source-root'
     source_root.mkdir(parents=True, exist_ok=True)
-    roots = {'source': source_root}
+    placement_root = tmp_path / 'placement-root'
+    placement_root.mkdir(parents=True, exist_ok=True)
+    roots = {'source': source_root, 'placement': placement_root}
 
-    policy = CompletionPolicy(
-        policy_version='1.0.0',
-        materialize_tiers=('SAME_STATION', 'CROSS_STATION'),
-        enabled_rules=('CROSS_CASE_REFERENCE_COPY_V1',),
-        max_reference_closure_depth=4,
-        placement_endpoint_bus=False,
-    )
+    policy = LEDGER_POLICY
 
     cases_spec = (
         {
@@ -408,7 +407,9 @@ def build(tmp_path):
                     data = _quoted_bytes(schema, rows)
                 else:
                     data = _ordinary_bytes(schema, rows)
-                z.writestr(member, data)
+                # Fixed timestamp: the fixture is a pipeline input, and an input that
+                # changes between runs makes every downstream digest meaningless.
+                z.writestr(ZipInfo(member, date_time=(1980, 1, 1, 0, 0, 0)), data)
                 members.append((key, member))
                 per_case.append((schema.file_type, member))
                 source_row_count += len(rows)
@@ -420,10 +421,18 @@ def build(tmp_path):
                     special['quoted'] = member
             cases.append((IDs.case_id(DATASET, key), key, tuple(per_case)))
 
+    (source_root / 'inventory.json').write_bytes(canonical_json_bytes(
+        {'cases': [{'source_case_key': key, 'members': [[t.value, m] for t, m in members]}
+                   for _cid, key, members in cases]}) + b'\n')
+
+    placement = build_placement(case_key='数据/丙变_10kV丙线303', stations=('S-BING',))
+    (placement_root / 'line_component_proposals.jsonl').write_bytes(b''.join(
+        canonical_json_bytes(p) + b'\n' for p in placement.inputs.placement_proposals))
+
     return DeliveryFixture(
         tmp_path=tmp_path,
         archive=archive,
-        roots=roots,
+        roots=dict(roots, placement=placement_root),
         members=tuple(members),
         cases=tuple(cases),
         source_row_count=source_row_count,
@@ -434,4 +443,136 @@ def build(tmp_path):
         no_trailing_member=special['no_trailing'],
         quoted_member=special['quoted'],
         policy=policy,
+        placement=placement,
     )
+
+
+LEDGER_POLICY = CompletionPolicy(
+    policy_version='1.1.0', materialize_tiers=('SAME_STATION',),
+    enabled_rules=(CROSS_CASE_RULE, PLACEMENT_BUS_RULE), max_reference_closure_depth=2,
+    placement_endpoint_bus=True)
+
+
+def ledger_inputs(*, tiers=('SAME_STATION',), placement=True, voltage=None, cases=2):
+    """A small mixed-input ``CompletionInputs``: one cross-case, one cohort, one placement.
+
+    Small enough to build in-process, and wide enough that every ledger stream carries a
+    row, so an artifact test cannot pass on an empty artifact.
+    """
+    case_key = '数据/甲变_10kV甲线101'
+    # The donor must be a Case the synthetic archive actually populates, or the
+    # delivery writer would be asked for a donor row that does not exist.
+    donor_key = '数据/丁变_10kV丁线404'
+    case_id = IDs.case_id(DATASET, case_key)
+    donor_id = IDs.case_id(DATASET, donor_key)
+    donor_ref = str(source_record_ref(f'{donor_key}/03_Switch.csv', data_row=1))
+    referring_ref = str(source_record_ref(f'{case_key}/03_Switch.csv', data_row=1))
+    audit = ({
+        'case_id': case_id, 'reference_id': 'd4.2-analysis:reference:aaa',
+        'source_entity_type': 'SWITCH', 'source_record_ref': referring_ref,
+        'raw_field': 'Switch_FromBus', 'raw_reference_value': 'B-X',
+        'classification': 'UNIQUE_EXTERNAL_MATCH', 'external_candidate_count': 1,
+        'local_candidate_count': 0,
+        'candidates': [{'case_id': donor_id, 'identity_status': 'UNIQUE',
+                        'type_compatible': True, 'canonical_ref': 'canonical:switch:1',
+                        'voltage_relationship': 'COMPATIBLE',
+                        'station_relationship': 'SAME_STATION',
+                        'source_entity_type': 'SWITCH',
+                        'source_record_ref': donor_ref,
+                        'index_id': 'd4.2-analysis:identity:bbb'}],
+    },)
+    policy = replace(LEDGER_POLICY, materialize_tiers=tiers, placement_endpoint_bus=placement)
+    inputs = CompletionInputs(
+        policy=policy, source_case_key_by_case={case_id: case_key, donor_id: donor_key},
+        audit_rows=audit, accepted_additions=(),
+        placement_proposals=(), endpoint_evidence=(),
+        placement_feeders=({'case_id': case_id, 'source_case_key': case_key,
+                            'feeder_id': 'feeder:one',
+                            'primary_status': 'INSUFFICIENT_PLACEMENT_EVIDENCE'},),
+        backbone_taxonomy=({'case_id': case_id, 'source_case_key': case_key,
+                            'feeder_id': 'feeder:two', 'd3_primary': 'SYNTHETIC_BACKBONE_REQUIRED',
+                            'outcome': 'MANUAL_LAYOUT_REQUIRED', 'source_line_count': 0},),
+        audit_classification=(),
+        audit_cases=({'case_id': case_id, 'hard_blockers': []},
+                     {'case_id': donor_id, 'hard_blockers': []}))
+    if not placement:
+        return inputs
+    placement_inputs = build_placement(case_key=case_key, stations=('S-JIA',),
+                                       voltage=voltage, lever=True).inputs
+    return replace(inputs, placement_proposals=placement_inputs.placement_proposals,
+                   endpoint_evidence=placement_inputs.endpoint_evidence,
+                   bus_member_bytes_by_case=placement_inputs.bus_member_bytes_by_case)
+
+
+def write_ledger_artifact(tmp_path, name='ledger', **kwargs):
+    """A small but real ledger artifact, for tests that must bind one."""
+    from grid_case_generator.io.completion_ledger_artifacts import write_artifact
+    root = Path(tmp_path) / name
+    inputs = ledger_inputs(**kwargs)
+    write_artifact(inputs, root, {'source': 'a' * 64, 'audit': 'b' * 64})
+    return root
+
+
+STUB_ROOTS = ('baseline', 'projection', 'feeder', 'recovery', 'd1', 'd2', 'frozen',
+              'accepted_v2')
+
+
+def _write_artifact_root(root, files):
+    """Write a fixture artifact root: the streams plus a canonical manifest over them."""
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    entries = {}
+    for name, data in files.items():
+        (root / name).write_bytes(data)
+        entries[name] = {'sha256': sha256(data).hexdigest(),
+                         'record_count': len(data.splitlines())}
+    (root / 'manifest.json').write_bytes(
+        canonical_json_bytes({'artifact_kind': 'FIXTURE', 'files': entries}) + b'\n')
+
+
+def _jsonl(rows):
+    return b''.join(canonical_json_bytes(r) + b'\n' for r in rows)
+
+
+def export_roots(fixture):
+    """The thirteen verified roots the export pipeline reads, over the synthetic intake.
+
+    The streams are projected from one `ledger_inputs()` so the fixtures cannot
+    contradict each other, and the eight roots the ledger does not read get a manifest
+    and one stream each so the binding and inventory checks have something real to bind.
+    """
+    tmp = fixture.tmp_path
+    inputs = ledger_inputs()
+    source_root, placement_root = fixture.roots['source'], fixture.roots['placement']
+    _write_artifact_root(source_root, {
+        'inventory.json': canonical_json_bytes(
+            {'cases': [{'source_case_key': key,
+                        'members': [[t.value, m] for t, m in members]}
+                       for _cid, key, members in fixture.cases]}) + b'\n',
+        'import_report.json': canonical_json_bytes(
+            {'cases': [{'case_id': cid, 'source_case_key': key}
+                       for cid, key, _m in fixture.cases]}) + b'\n',
+        'dataset.json': canonical_json_bytes(
+            {'source_uri': str(fixture.archive),
+             'source_checksum': 'sha256:' + sha256(fixture.archive.read_bytes()).hexdigest()}) + b'\n',
+    })
+    _write_artifact_root(placement_root, {
+        'line_component_proposals.jsonl': _jsonl(inputs.placement_proposals),
+        'line_endpoint_evidence.jsonl': _jsonl(inputs.endpoint_evidence),
+        'feeder_classification.jsonl': _jsonl(inputs.placement_feeders),
+    })
+    _write_artifact_root(tmp / 'audit-root', {
+        'cross_case_references.jsonl': _jsonl(inputs.audit_rows),
+        'case_inventory.jsonl': _jsonl(inputs.audit_cases),
+    })
+    _write_artifact_root(tmp / 'd3-analysis-root', {
+        'accepted_connections.jsonl': _jsonl(inputs.accepted_additions)})
+    _write_artifact_root(tmp / 'd4-root', {
+        'feeder_gap_taxonomy.jsonl': _jsonl(inputs.backbone_taxonomy)})
+    for name in STUB_ROOTS:
+        _write_artifact_root(tmp / f'{name}-root', {'stream.jsonl': b'{}\n'})
+    return {
+        'source': source_root, 'placement': placement_root, 'audit': tmp / 'audit-root',
+        'd3_analysis': tmp / 'd3-analysis-root', 'd4': tmp / 'd4-root',
+        **{name: tmp / f'{name}-root' for name in STUB_ROOTS},
+    }
