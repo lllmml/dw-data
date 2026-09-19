@@ -392,3 +392,22 @@ def test_cohort_records_are_deterministic_under_input_reordering():
     backward = build_ledger(cohort_inputs(backbone=list(reversed(rows[:2])),
                                           placement=rows[2:]))
     assert forward.unresolved_records == backward.unresolved_records
+
+
+def test_cohort_overlap_counts_one_feeder_under_three_reasons():
+    """Regression cover for the overlap count, including colons in the identifiers.
+
+    This does NOT distinguish a structural `(case_id, feeder_id)` key from a key
+    recovered by stripping the `cohort:{reason}:` prefix off `source_record_ref`:
+    the prefix strip happens to recover exactly `{case_id}:{feeder_id}`, so the two
+    formulations agree on every input, colons included. The structural key is kept
+    because it does not depend on the ref's format, not because the old one was
+    wrong. A future edit back to the parsed form would still pass this test.
+    """
+    rows = [backbone_row('case:a:b', 'f:1', source_line_count=0),
+            placement_row('case:a:b', 'f:1', 'NON_UNIQUE_PLACEMENT')]
+    ledger = build_ledger(cohort_inputs(backbone=rows[:1], placement=rows[1:]))
+    # source_line_count=0 emits MANUAL_LAYOUT_REQUIRED and NO_SOURCE_LINE_LAYOUT_BASIS,
+    # and the placement row emits NON_UNIQUE_PLACEMENT: three records, one feeder.
+    assert len(ledger.unresolved_records) == 3
+    assert ledger.counts['cohort_overlap_members'] == 1
