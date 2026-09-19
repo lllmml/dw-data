@@ -39,8 +39,11 @@ Summary of the four, for readers of this plan who do not open the revision:
 
 **Contract constants this plan must match.** `VERSION = '1.1.0'` for the contract and
 rule analysis; `POLICY_VERSION = '1.1.0'` as shipped in
-`configs/nanjing_completion_policy_v1.json`. `PLACEMENT_BUS_RULE_VERSION = '1.1.0'`;
-the other three rules carry `'1.0.0'`. Artifact directory names stay
+`configs/nanjing_completion_policy_v1.json`. `PLACEMENT_BUS_RULE_VERSION = '1.1.0'` and, per
+revision 003, `CROSS_CASE_RULE_VERSION = '1.1.0'` — that rule's published row set would
+differ from its 1.0.0 form, though it has never run. `SOURCE_PASSTHROUGH_V1` and
+`ACCEPTED_DETERMINISTIC_RECOVERY_V1` carry `'1.0.0'`, and `COHORT_TAXONOMY_V1` carries
+its own `COHORT_RULE_VERSION = '1.0.0'`. Artifact directory names stay
 `completion-ledger-v1` and `derived-delivery-v1` because no artifact was ever published
 under 1.0.0.
 
@@ -723,7 +726,7 @@ def test_no_cohort_record_produces_a_csv_row(ledger_fixture):
 
 ## 8. Slice 6 — `CROSS_CASE_REFERENCE_COPY_V1` materialization
 
-**Goal.** Copy a donor Case's source row verbatim into the referring Case under the contract's six preconditions, with the tier gate and the bounded closure.
+**Goal.** Copy a donor Case's source row verbatim into the referring Case under the contract's nine preconditions (revision 003), with the tier gate and the bounded closure. This is the first slice that appends a row to a delivered CSV.
 
 **Files.** Extend `generation/completion_ledger.py` and `io/derived_delivery_artifacts.py`.
 
@@ -735,31 +738,111 @@ def eligible(row, tiers) -> tuple[bool, str]: ...
 def append_raw_rows(handle, archive, rows) -> int: ...
 ```
 
-**Preconditions**, evaluated in the contract's order so that exactly one reason is recorded per audit row:
+**Preconditions**, evaluated in this order so that exactly one reason is recorded per audit row. This is revision 003's corrected list, which is exactly the audit's `strict_candidate` predicate:
 
 ```python
-def eligible(row, tiers):
+def eligible(row, tiers, cases):
     if row['classification'] != 'UNIQUE_EXTERNAL_MATCH':
         return False, row['classification']
     if row['external_candidate_count'] != 1:
         return False, 'MULTIPLE_EXTERNAL_MATCH'
-    candidate = row['candidates'][0]
+    candidate = (row.get('candidates') or [None])[0]
+    if candidate is None:
+        return False, 'NO_CANONICAL_CANDIDATE'
     if candidate['identity_status'] != 'UNIQUE':
         return False, 'AMBIGUOUS_IDENTITY'
     if not candidate.get('type_compatible'):
         return False, 'TYPE_INCOMPATIBLE'
-    if row['explicit_voltage_conflict_count'] != 0:
-        return False, 'EXPLICIT_VOLTAGE_CONFLICT'
+    if not candidate.get('canonical_ref'):
+        return False, 'NO_CANONICAL_CANDIDATE'
+    if candidate.get('voltage_relationship') != 'COMPATIBLE':
+        return False, 'VOLTAGE_NOT_COMPATIBLE'
+    if row.get('local_candidate_count'):
+        return False, 'ALSO_RESOLVES_CASE_LOCALLY'
+    if cases[row['case_id']].get('hard_blockers'):
+        return False, 'REFERRING_CASE_HARD_BLOCKER'
+    if cases[candidate['case_id']].get('hard_blockers'):
+        return False, 'DONOR_CASE_HARD_BLOCKER'
     if candidate['station_relationship'] not in tiers:
         return False, 'TIER_NOT_MATERIALIZED'
     return True, ''
 ```
 
+`cases` is the audit's `case_inventory.jsonl` keyed by `case_id`; it is what supplies both `hard_blockers` gates. Note the last check is the **policy** gate and comes last, so a row excluded by both the tier policy and an evidence gate is attributed to the evidence gate. The order is the contract's and the report's per-reason counts depend on it.
+
+**Measured gate-by-gate, under the v1 policy**, so an implementer can check each step against a known number:
+
+| Gate | Survivors | Removed |
+|---|---:|---:|
+| six conditions of the superseded 1.0.0 list | 7,818 | — |
+| `+ voltage_relationship == 'COMPATIBLE'` | 4,410 | 3,408 |
+| `+ canonical_ref present` | 4,410 | 0 |
+| `+ local_candidate_count == 0` | 4,410 | 0 |
+| `+ referring Case has no hard_blockers` | 2,954 | 1,456 |
+| `+ donor Case has no hard_blockers` | **2,544** | 410 |
+
 `MULTIPLE_EXTERNAL_MATCH` must be counted once, not twice, when both `classification == 'MULTIPLE_EXTERNAL_MATCH'` and `external_candidate_count > 1` hold — the first branch returns, so the ordering above handles it. The report's per-reason counts depend on this ordering, so it is not free to reorder.
 
-`append_raw_rows` writes `b'\r\n'.join(records[donor_row] for ...) + b'\r\n'` to an open handle. Donor bytes come from `raw_member_bytes(archive, member_path_of(candidate['source_record_ref']))` and the donor row from that ref's `.data_row`. The appended bytes are therefore the donor's own row bytes, including its original quoting.
+## The member cache
 
-**Member-splitting constraint (from Slice 3 code review).** `raw_record_bytes(member_bytes, data_row)` calls `split_raw_records` on the **whole member** every time it is invoked, so a per-row call pattern re-partitions the donor member once per copied row. This copy set can draw many rows from one donor member, so split each source member **once** and index the returned tuple for every row taken from it — `records = split_raw_records(raw_member_bytes(archive, member_path))`, then `records[ref.data_row]`. Do not call `raw_record_bytes` inside a per-row loop. The API already supports this; the constraint is on how Slice 6 uses it, not on the Slice 3 module.
+`raw_record_bytes(member_bytes, data_row)` re-partitions the **whole member** on every call, so a per-row call pattern re-scans a donor member once per copied row. Split each source member once and index the returned tuple:
+
+```python
+class _MemberCache:
+    """Split each source member at most once, keyed by member path."""
+    def __init__(self, archive):
+        self._archive, self._records = archive, {}
+
+    def records(self, member_path):
+        if member_path not in self._records:
+            self._records[member_path] = split_raw_records(
+                raw_member_bytes(self._archive, member_path))
+        return self._records[member_path]
+```
+
+Use `cache.records(donor_member)[donor_data_row]`, never `raw_record_bytes` inside the per-row loop. The same cache serves the member being written, so its own split is reused too.
+
+**Cache footprint, measured for the v1 policy cohort**, which is what makes an unbounded dict safe here rather than merely convenient:
+
+| Measure | Value |
+|---|---:|
+| materialized rows | 2,544 |
+| unique referring Cases | 836 |
+| unique referring members (files that receive appended rows) | 955 |
+| unique donor Cases | 778 |
+| unique donor members | 806 |
+| **total uncompressed donor bytes** | **3,242,748 (3.1 MiB)** |
+| donor member bytes, min / median / max | 132 / 2,469 / 53,405 |
+| rows per donor member, max / mean | 82 / 3.16 |
+| donor members reused by more than one referring Case | 361 |
+
+At 3.1 MiB the cache cannot be a memory concern, and 361 of 806 donor members are reused, so it earns its keep. The bound grows only with the closure, which follows references out of the copied rows; measure the closure's incremental donor set when implementing and report it rather than assuming it is small.
+
+## Writing a member that receives appended rows
+
+One `'xb'` open per member, source bytes first, generated bytes last, and never a decode:
+
+```python
+def write_member(archive, member_path, destination, appended=()) -> bytes:
+    data = raw_member_bytes(archive, member_path)
+    with destination.open('xb') as stream:
+        stream.write(data)
+        if appended:
+            if not data.endswith((b'\r\n', b'\n', b'\r')):
+                stream.write(b'\r\n')
+            stream.write(b'\r\n'.join(appended) + b'\r\n')
+    return data
+```
+
+`passthrough_member` stays as the no-append entry point and delegates, so its signature and behaviour are unchanged.
+
+The `endswith` check is load-bearing, not defensive. The intake's members all end with a terminator, but a member need not: the synthetic fixture's `06_EarthingSwitch.csv` deliberately does not. Without the check the appended block concatenates onto the final source row and two logical records silently become one, after which the member's row count disagrees with the provenance sidecar. Per revision 003 this separator **exists only to prevent record concatenation** — it is not source normalization, the source region stays verbatim, and a member whose own terminators differ ends up mixed. Report that case; do not normalize it.
+
+The appended rows are the donor's own row bytes, including the donor's original quoting, taken from `cache.records(member_path_of(candidate['source_record_ref']))[candidate_ref.data_row]`.
+
+## Provenance for appended rows
+
+`row_kind` stays `SOURCE | APPENDED` — no new kind is introduced. The recovery reason is carried by the record's other fields, which is what they are for: `rule_id = 'CROSS_CASE_REFERENCE_COPY_V1'`, `rule_version = '1.1.0'`, `completion_status = 'PROPOSED'`, `confidence_class = 'UNIQUE_EVIDENCE'`, `tier = 'SAME_STATION'`, and `evidence_refs` citing the audit row's `reference_id` and the donor's `index_id`. An `APPENDED` record is distinguishable from a `SOURCE` one by `row_kind` alone, which is all the contract requires.
 
 **Closure.** After a row is materialized, its own reference fields are resolved against the audit rows and followed with `walk_closure` bounded by `policy.max_reference_closure_depth`, visited set keyed by `closure_key(target_case_id, source_entity_type, source_id)`. A reference that is already visited, that fails a precondition, or whose depth exceeds the bound becomes an `UNRESOLVED` record with `CLOSURE_DEPTH_EXCEEDED` or the failing precondition's reason, and is counted in the report. Truncation is never silent.
 
@@ -850,7 +933,7 @@ def test_closure_cycle_terminates(ledger_fixture):
 - [ ] **Step 4: Run** — expect PASS.
 - [ ] **Step 5: Commit** `feat: materialize same-station cross-case reference completions`.
 
-**Acceptance criteria.** The truth table covers all six preconditions and records exactly one reason per row; `CROSS_STATION` yields one `TIER_NOT_MATERIALIZED` record and no appended row; appended bytes equal donor row bytes; closure is depth-bounded, cycle-safe and every overflow is counted; candidate order changes nothing.
+**Acceptance criteria.** The truth table covers all nine preconditions and records exactly one reason per row; the gate-by-gate counts reproduce 7,818 → 4,410 → 2,954 → 2,544 on the real audit stream; `CROSS_STATION` yields one `TIER_NOT_MATERIALIZED` record and no appended row; appended bytes equal donor row bytes; a member whose source region does not end with a terminator gains exactly one separator and does not concatenate two records; no source region byte is altered; each source member is split at most once per run; the closure is depth-bounded, cycle-safe and every overflow is counted; candidate order changes nothing; `counts['materialized_rows']` equals the number of appended rows and is no longer a hardcoded zero.
 
 ---
 
