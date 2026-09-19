@@ -231,3 +231,164 @@ def test_no_io_or_randomness_in_the_module():
             imported.add(node.module.split('.')[0])
     assert not (imported & forbidden), imported & forbidden
     assert 'hash(' not in source
+
+
+def cohort_inputs(*, placement=(), backbone=(), additions=(), case_keys=None, policy=None):
+    from grid_case_generator.generation.completion_ledger import CompletionInputs
+    from grid_case_generator.models.completion_export import (
+        INFERENCE_RULES, CompletionPolicy)
+    policy = policy or CompletionPolicy(
+        policy_version='1.0.0', materialize_tiers=('SAME_STATION',),
+        enabled_rules=INFERENCE_RULES, max_reference_closure_depth=2,
+        placement_endpoint_bus=True)
+    return CompletionInputs(
+        policy=policy, source_case_key_by_case=dict(case_keys or {}),
+        audit_rows=(), accepted_additions=tuple(additions),
+        placement_proposals=(), endpoint_evidence=(),
+        placement_feeders=tuple(placement), backbone_taxonomy=tuple(backbone),
+        audit_classification=())
+
+
+def placement_row(case, feeder, status):
+    return {'case_id': case, 'source_case_key': '数据/甲', 'feeder_id': feeder,
+            'primary_status': status}
+
+
+def backbone_row(case, feeder, *, d3_primary='SYNTHETIC_BACKBONE_REQUIRED',
+                 outcome='MANUAL_LAYOUT_REQUIRED', source_line_count=0):
+    return {'case_id': case, 'source_case_key': '数据/甲', 'feeder_id': feeder,
+            'd3_primary': d3_primary, 'outcome': outcome,
+            'source_line_count': source_line_count}
+
+
+def addition(case, edge, rule='LEAF_SWITCH_REPRESENTATION_V2', refs=('zip-member:a/08_Line.csv#data-row=1',)):
+    return {'case_id': case, 'edge_id': edge, 'rule_id': rule, 'rule_version': '1.0.0',
+            'supporting_source_refs': list(refs)}
+
+
+def test_recovery_records_are_confirmed_and_append_nothing():
+    ledger = build_ledger(cohort_inputs(additions=[addition('case:A', 'e1')],
+                                        case_keys={'case:A': '数据/甲'}))
+    assert ledger.completion_records
+    assert {r['rule_id'] for r in ledger.completion_records} == {'ACCEPTED_DETERMINISTIC_RECOVERY_V1'}
+    assert {r['completion_status'] for r in ledger.completion_records} == {'CONFIRMED'}
+    assert {r['confidence_class'] for r in ledger.completion_records} == {'EXACT_STRUCTURAL'}
+    assert all(r['donor_source_record_ref'] is None for r in ledger.completion_records)
+    assert all(r['raw_reference_value'] is None for r in ledger.completion_records)
+    assert ledger.counts['materialized_rows'] == 0
+
+
+def test_recovery_records_cite_the_persisted_edge_and_rule():
+    ledger = build_ledger(cohort_inputs(additions=[addition('case:A', 'e1')],
+                                        case_keys={'case:A': '数据/甲'}))
+    first, = ledger.completion_records
+    assert 'e1' in first['evidence_refs']
+    assert 'LEAF_SWITCH_REPRESENTATION_V2/1.0.0' in first['evidence_refs']
+    assert first['source_entity_type'] == 'EQUIPMENT'
+    assert first['source_case_key'] == '数据/甲'
+
+
+def test_recovery_takes_the_smallest_supporting_ref_regardless_of_input_order():
+    refs = ['zip-member:b/08_Line.csv#data-row=2', 'zip-member:a/08_Line.jsonl#data-row=1']
+    forward = build_ledger(cohort_inputs(additions=[addition('case:A', 'e1', refs=refs)],
+                                         case_keys={'case:A': '数据/甲'}))
+    backward = build_ledger(cohort_inputs(additions=[addition('case:A', 'e1', refs=list(reversed(refs)))],
+                                          case_keys={'case:A': '数据/甲'}))
+    assert forward.completion_records == backward.completion_records
+    assert forward.completion_records[0]['source_record_ref'] == min(refs)
+
+
+def test_recovery_is_gated_by_the_policy():
+    from grid_case_generator.models.completion_export import CompletionPolicy
+    policy = CompletionPolicy(policy_version='1.0.0', materialize_tiers=('SAME_STATION',),
+                              enabled_rules=('CROSS_CASE_REFERENCE_COPY_V1',),
+                              max_reference_closure_depth=2, placement_endpoint_bus=True)
+    ledger = build_ledger(cohort_inputs(additions=[addition('case:A', 'e1')],
+                                        case_keys={'case:A': '数据/甲'}, policy=policy))
+    assert not ledger.completion_records
+
+
+def test_recovery_with_an_unknown_case_fails_loudly():
+    with pytest.raises(ValueError, match='unknown case'):
+        build_ledger(cohort_inputs(additions=[addition('case:Z', 'e1')], case_keys={}))
+
+
+@pytest.mark.parametrize('status,reason', [
+    ('INSUFFICIENT_PLACEMENT_EVIDENCE', 'INSUFFICIENT_PLACEMENT_EVIDENCE'),
+    ('NON_UNIQUE_PLACEMENT', 'NON_UNIQUE_PLACEMENT'),
+])
+def test_placement_cohort_reasons_are_emitted(status, reason):
+    ledger = build_ledger(cohort_inputs(placement=[placement_row('case:A', 'f1', status)]))
+    assert {r['reason'] for r in ledger.unresolved_records} == {reason}
+    assert {r['completion_status'] for r in ledger.unresolved_records} == {'UNRESOLVED'}
+    assert {r['confidence_class'] for r in ledger.unresolved_records} == {'NONE'}
+    assert not ledger.completion_records
+
+
+def test_placement_cohort_ignores_rows_that_are_not_a_cohort_member():
+    ledger = build_ledger(cohort_inputs(placement=[
+        placement_row('case:A', 'f1', 'PLACEMENT_EVIDENCE_SUFFICIENT')]))
+    assert not ledger.unresolved_records
+
+
+def test_backbone_cohort_requires_the_d3_primary_class():
+    ledger = build_ledger(cohort_inputs(backbone=[
+        backbone_row('case:A', 'f1', d3_primary='ROLE_CONFIRMATION_REQUIRED')]))
+    assert not ledger.unresolved_records
+
+
+def test_backbone_cohort_ignores_a_non_manual_outcome():
+    ledger = build_ledger(cohort_inputs(backbone=[
+        backbone_row('case:A', 'f1', outcome='AUTOMATIC_PROPOSAL_ELIGIBLE',
+                     source_line_count=5)]))
+    assert not ledger.unresolved_records
+
+
+def test_manual_layout_and_no_source_line_are_both_reported():
+    ledger = build_ledger(cohort_inputs(backbone=[backbone_row('case:A', 'f1',
+                                                               source_line_count=0)]))
+    assert {r['reason'] for r in ledger.unresolved_records} == {
+        'MANUAL_LAYOUT_REQUIRED', 'NO_SOURCE_LINE_LAYOUT_BASIS'}
+    assert len(ledger.unresolved_records) == 2
+
+
+def test_a_feeder_with_source_lines_gets_only_manual_layout():
+    ledger = build_ledger(cohort_inputs(backbone=[backbone_row('case:A', 'f1',
+                                                               source_line_count=7)]))
+    assert {r['reason'] for r in ledger.unresolved_records} == {'MANUAL_LAYOUT_REQUIRED'}
+
+
+def test_cohort_overlap_count_reflects_multi_reason_feeders():
+    ledger = build_ledger(cohort_inputs(backbone=[
+        backbone_row('case:A', 'f1', source_line_count=0),
+        backbone_row('case:B', 'f2', source_line_count=3)]))
+    assert len(ledger.unresolved_records) == 3
+    assert ledger.counts['cohort_overlap_members'] == 1
+
+
+def test_a_repeated_cohort_row_cannot_inflate_a_count():
+    row = backbone_row('case:A', 'f1', source_line_count=0)
+    ledger = build_ledger(cohort_inputs(backbone=[row, dict(row), dict(row)]))
+    assert len(ledger.unresolved_records) == 2
+    assert ledger.counts['cohort_overlap_members'] == 1
+
+
+def test_cohort_records_carry_a_versioned_rule_and_a_reason():
+    ledger = build_ledger(cohort_inputs(placement=[
+        placement_row('case:A', 'f1', 'NON_UNIQUE_PLACEMENT')]))
+    record, = ledger.unresolved_records
+    assert record['rule_id'] == 'COHORT_TAXONOMY_V1'
+    assert record['rule_version'] == '1.0.0'
+    assert record['reason'] == 'NON_UNIQUE_PLACEMENT'
+    assert record['source_entity_type'] == 'FEEDER'
+    assert record['source_record_ref'].startswith('cohort:NON_UNIQUE_PLACEMENT:case:A:')
+
+
+def test_cohort_records_are_deterministic_under_input_reordering():
+    rows = [backbone_row('case:A', 'f1', source_line_count=0),
+            backbone_row('case:B', 'f2', source_line_count=3),
+            placement_row('case:C', 'f3', 'NON_UNIQUE_PLACEMENT')]
+    forward = build_ledger(cohort_inputs(backbone=rows[:2], placement=rows[2:]))
+    backward = build_ledger(cohort_inputs(backbone=list(reversed(rows[:2])),
+                                          placement=rows[2:]))
+    assert forward.unresolved_records == backward.unresolved_records

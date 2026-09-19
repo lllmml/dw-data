@@ -646,16 +646,20 @@ def cohort_records(inputs: CompletionInputs) -> tuple[dict, ...]: ...
 
 **`recovery_records`.** Consumes `inputs.accepted_additions` (`accepted-topology-v2/additions.jsonl`, 59,354 records, rules `SERIES_EXACT_DIRECT_V2` and `LEAF_SWITCH_REPRESENTATION_V2`, both `ACCEPTED`). Emits one `CONFIRMED` / `EXACT_STRUCTURAL` record per addition with `rule_id=RECOVERY_RULE`, `tier=None`, `source_entity_type='EQUIPMENT'`, `source_record_ref` set to the addition's first `supporting_source_refs` entry after sorting (the addition's refs are already sorted-unique by the D3 contract), `donor_source_entity_type=None`, `donor_source_record_ref=None`, `raw_field=None`, `raw_reference_value=None`, `closure_depth=0`, and `evidence_refs=[addition['edge_id'], f"{addition['rule_id']}/{addition['rule_version']}"]`. It appends **no** CSV row; the writer's appended-row set is empty for this rule and the delivery verifier asserts it.
 
-**`cohort_records`.** Emits one `UNRESOLVED` / `NONE` record per cohort member, read from three sources with their own reason:
+**`cohort_records`.** Emits one `UNRESOLVED` / `NONE` record per cohort member. The predicates below were verified against the persisted artifacts, not inferred; measured populations are given for each.
 
-| Source | Field | Reason |
-|---|---|---|
-| `inputs.placement_feeders` | `classification == 'INSUFFICIENT_PLACEMENT_EVIDENCE'` | `INSUFFICIENT_PLACEMENT_EVIDENCE` |
-| `inputs.placement_feeders` | `classification == 'NON_UNIQUE_PLACEMENT'` | `NON_UNIQUE_PLACEMENT` |
-| `inputs.backbone_taxonomy` | `primary_gap == 'MANUAL_LAYOUT_REQUIRED'` | `MANUAL_LAYOUT_REQUIRED` |
-| `inputs.audit_classification` | `no_source_line_feeders` membership | `NO_SOURCE_LINE_LAYOUT_BASIS` |
+| Reason | Source stream | Predicate | Measured |
+|---|---|---|---:|
+| `INSUFFICIENT_PLACEMENT_EVIDENCE` | `placement-evidence-v1-1/feeder_classification.jsonl` | `primary_status == 'INSUFFICIENT_PLACEMENT_EVIDENCE'` | 78 |
+| `NON_UNIQUE_PLACEMENT` | same | `primary_status == 'NON_UNIQUE_PLACEMENT'` | 8 |
+| `MANUAL_LAYOUT_REQUIRED` | `synthetic-backbone-proposals-v1/feeder_gap_taxonomy.jsonl` | `d3_primary == 'SYNTHETIC_BACKBONE_REQUIRED'` **and** `outcome == 'MANUAL_LAYOUT_REQUIRED'` | 1,401 |
+| `NO_SOURCE_LINE_LAYOUT_BASIS` | same | `d3_primary == 'SYNTHETIC_BACKBONE_REQUIRED'` **and** `outcome == 'MANUAL_LAYOUT_REQUIRED'` **and** `source_line_count == 0` | 1,259 |
 
-Each record carries the cohort's own `case_id` and `feeder_id`-derived `source_record_ref` where the artifact supplies one, and `evidence_refs` citing the emitting artifact's own identifier. Because a Feeder can appear in more than one cohort, `build_ledger` de-duplicates on `(reason, case_id, source_record_ref)` and the report states the overlap rather than summing silently.
+Field names matter and were wrong in an earlier draft of this plan. `feeder_classification.jsonl` keys its verdict as **`primary_status`**, not `classification`. `feeder_gap_taxonomy.jsonl` carries the D2-derived class in **`d3_primary`** and the D4 verdict in **`outcome`**; there is no `primary_gap` field, and `taxonomy_primary` is a *different* axis whose value set (`ACCESS_POINT_GAP`, `DISCONNECTED_SOURCE_LINE_COMPONENTS`, `HEAD_TO_SOURCE_COMPONENT_GAP`, `INSUFFICIENT_STRUCTURE`, `TRANSFORMER_REGION_GAP`, `REMOTE_SWITCH_PORT_GAP`) contains no `MANUAL_LAYOUT_REQUIRED` at all. Both streams already carry `case_id`, `source_case_key` and `feeder_id`.
+
+**The `SYNTHETIC_BACKBONE_REQUIRED` cohort is 1,402 rows**, and its three-way split is exact: 1,259 with no source Line, 142 with source Lines, and 1 `AUTOMATIC_PROPOSAL_ELIGIBLE`. So `MANUAL_LAYOUT_REQUIRED` (1,401) is the first two groups and `NO_SOURCE_LINE_LAYOUT_BASIS` (1,259) is a **strict subset** of it. Those 1,259 Feeders therefore each receive **two** `UNRESOLVED` records, one per reason, and `counts['cohort_overlap_members']` reports 1,259 — the contract's "states the overlap rather than summing silently" exists for exactly this scale. The two reasons are genuinely distinct problems and both are reported; the cohorts are deliberately **not** made mutually exclusive.
+
+Each record carries the cohort's own `case_id`, `source_case_key` and `feeder_id`, with `source_record_ref` derived from those, and `evidence_refs` citing the emitting artifact's identifier (`feeder_id` for the placement cohort, the taxonomy row's `feeder_id` plus `d3_primary` for the backbone cohorts). `build_ledger` de-duplicates on `(reason, case_id, source_record_ref)` so a stream that repeats a row cannot inflate a count.
 
 - [ ] **Step 1: Write the failing test**
 
