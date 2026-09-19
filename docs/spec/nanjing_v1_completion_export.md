@@ -1,4 +1,4 @@
-# Nanjing v1 completion and export / 1.2.0
+# Nanjing v1 completion and export / 1.3.0
 
 Revision history: 1.0.0 froze this contract. **1.1.0** incorporates
 [revision 001](revisions/nanjing_v1_completion_export_revision_001.md), which replaces
@@ -7,8 +7,12 @@ four clauses the persisted evidence contradicts: the source of `Bus_BaseKV`, the
 generated Bus rows, and the delivery manifest's relation to its own archive. **1.2.0**
 incorporates [revision 002](revisions/nanjing_v1_completion_export_revision_002.md),
 which quantifies the UNRESOLVED cohort overlap and names the classification-only rule
-that produces that taxonomy. No rule precondition, tier, state, confidence class, policy
-field or prohibition changed in either revision.
+that produces that taxonomy. **1.3.0** incorporates
+[revision 003](revisions/nanjing_v1_completion_export_revision_003.md), which corrects
+the `CROSS_CASE_REFERENCE_COPY_V1` precondition list — as written it selected 7,818
+references rather than the 2,544 the contract claimed, admitting 2,993 whose voltage
+evidence is contradicted — and disambiguates the append separator. No tier, state,
+confidence class, policy field or prohibition changed in any revision.
 
 This contract defines an independent completion/export layer that produces a
 deliverable v1 derived dataset from the frozen source facts plus the already
@@ -110,14 +114,25 @@ accepted deterministic rule.
 ### `CROSS_CASE_REFERENCE_COPY_V1` — PROPOSED, `UNIQUE_EVIDENCE`
 
 Consumes `case-boundary-audit-v1/cross_case_references.jsonl`. The rule fires only when
-**all** of the following hold:
+**all** of the following hold — this is exactly the audit's `strict_candidate`
+predicate:
 
 - `classification == 'UNIQUE_EXTERNAL_MATCH'`;
 - `external_candidate_count == 1`;
 - the single candidate's `identity_status == 'UNIQUE'`;
-- the single candidate's `type_compatible == true`;
-- `explicit_voltage_conflict_count == 0`;
+- the single candidate's `type_compatible == true` and its `canonical_ref` is present;
+- the single candidate's `voltage_relationship == 'COMPATIBLE'` — **positive** voltage
+  compatibility, not merely the absence of an explicit conflict;
+- `local_candidate_count == 0` — the reference does not also resolve Case-locally;
+- the referring Case carries no `hard_blockers`;
+- the donor Case carries no `hard_blockers`;
 - the candidate's `station_relationship` is a member of policy `materialize_tiers`.
+
+The last four conditions of that list are not policy levers: they are preconditions over
+persisted evidence. In particular a reference whose admitting or receiving Case the
+audit already flags as hard-contradictory is not one this rule may act on, and an
+`explicit_voltage_conflict_count == 0` test alone would admit 2,993 references the
+evidence actively contradicts.
 
 Action: copy the donor Case's source row for the candidate's `source_entity_type`
 verbatim into the referring Case's CSV for that entity type. The row is appended; the
@@ -373,6 +388,18 @@ and no additional BOM. A CSV with no appended rows is byte-identical to its sour
 member; the exporter writes such members through unchanged rather than re-serializing
 them.
 
+Before writing the appended block the writer checks whether the source bytes already end
+with a record terminator (`\r\n`, `\n` or `\r`); if they do not, it writes **one** `\r\n`
+first. **That separator exists only to prevent two logical records from concatenating
+into one. It is not source normalization and it is not a claim about the member's
+format.** The writer never rewrites, re-terminates or re-encodes an existing byte — the
+source region of every delivered member stays verbatim, and the separator is added at the
+single point where generated content begins. A member that receives appended rows and
+whose existing records use a different terminator therefore ends up with mixed
+terminators; that is accepted and reported, because line endings are not semantic here
+and normalizing them would break the byte-fidelity guarantee that untouched members
+depend on.
+
 Appended rows are ordered by `(rule_id, provenance_id)` so ordering is a stable
 serialization, never a selection.
 
@@ -491,7 +518,7 @@ are not asserted as literals in tests.
 
 ## Versioning
 
-Contract and rule-analysis version `1.2.0`, incorporating revisions 001 and 002. Artifact
+Contract and rule-analysis version `1.3.0`, incorporating revisions 001, 002 and 003. Artifact
 directories `completion-ledger-v1` and `derived-delivery-v1` — the `-v1` suffix denotes
 the first published generation of this contract family, not the contract version, and no
 artifact was ever published under 1.0.0. Generated-ID namespaces
