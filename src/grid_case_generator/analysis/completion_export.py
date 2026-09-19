@@ -18,7 +18,7 @@ from grid_case_generator.io.completion_ledger_artifacts import (
 from grid_case_generator.io.derived_delivery_artifacts import (
     ARCHIVE_NAME, build_archive, describe_archive, write_delivery)
 from grid_case_generator.io.switch_projection_artifacts import check_output
-from grid_case_generator.models.completion_export import parse_policy
+from grid_case_generator.models.completion_export import parse_policy, policy_sha256
 from grid_case_generator.validation.completion_export import validate_delivery
 
 PROVENANCE_NAME = 'row_provenance.jsonl'
@@ -30,7 +30,8 @@ def sidecar_path(delivery_output):
     return delivery_output.parent / f'{delivery_output.name}-verification.json'
 
 
-def write_sidecar(delivery_output, *, archive, bindings_, verdict, policy_hash):
+def write_sidecar(delivery_output, *, archive, bindings_, verdict, policy_hash,
+                  ledger_manifest_sha256=None):
     """Record the delivery's external bindings, archive digest and verdict.
 
     The archive digest lives here and never in the manifest: the archive contains the
@@ -44,6 +45,7 @@ def write_sidecar(delivery_output, *, archive, bindings_, verdict, policy_hash):
         'reasons': verdict['reasons'],
         'measured': verdict['measured'],
         'policy_sha256': policy_hash,
+        'ledger_manifest_sha256': ledger_manifest_sha256,
         'manifest_sha256': sha256(manifest).hexdigest(),
         'provenance_sha256': sha256(provenance).hexdigest(),
         'archive_name': archive['name'],
@@ -67,16 +69,20 @@ def run_export(roots, policy_path, ledger_output, delivery_output, *, verify=Fal
     before = bindings(roots)
     verify_manifests(roots)
     inputs = inputs_from_artifacts(roots, policy)
-    # Built once: the ledger artifact persists these records and the delivery writer
-    # consumes these very plans, so the two can never describe different row sets.
+    # Built once per run and shared: the ledger artifact persists these records and the
+    # delivery writer consumes these very plans, so the two artifacts cannot describe
+    # different row sets. The verifier's replay builds its own ledger from the same
+    # inputs on purpose — an independent re-derivation is the point of it.
     ledger = build_ledger(inputs)
 
     if verify:
-        ledger_result = verify_artifact(ledger_output, inputs=inputs, expected_bindings=before)
-    else:
-        ledger_result = write_artifact(inputs, ledger_output, before, protected=roots)
-        verify_artifact(ledger_output, inputs=inputs, expected_bindings=before)
-        ledger_result.setdefault('manifest_sha256', ledger_result.get('manifest_sha256'))
+        # Delegated, so a re-verify cannot rebuild the archive or rewrite the sidecar:
+        # both are the external evidence being checked.
+        return verify_export(roots, policy_path, ledger_output, delivery_output)
+
+    ledger_result = write_artifact(inputs, ledger_output, before, protected=roots)
+    verify_artifact(ledger_output, inputs=inputs, expected_bindings=before)
+    ledger_result.setdefault('manifest_sha256', ledger_result.get('manifest_sha256'))
 
     archive_path = source_archive(roots['source'])
     if not verify:
@@ -85,18 +91,19 @@ def run_export(roots, policy_path, ledger_output, delivery_output, *, verify=Fal
                        roots=dict(roots, ledger=ledger_output),
                        append_plan=ledger.append_plan, bus_plan=ledger.bus_plan,
                        ledger_root=ledger_output, input_bindings=before, progress=progress)
-    # Re-verifying must not rebuild: the archive is the delivery's external anchor and
-    # rewriting it would replace the very bytes being attested to.
-    archive = (describe_archive(delivery_output) if verify
-               else build_archive(delivery_output))
+    archive = build_archive(delivery_output)
     verdict = validate_delivery(delivery_output, ledger_root=ledger_output, roots=roots,
                                 policy=policy, archive=archive_path)
-    sidecar = write_sidecar(delivery_output, archive=archive, bindings_=before,
-                            verdict=verdict, policy_hash=ledger_result['policy_sha256'])
+    # The final input check comes first: a PASS sidecar must never be published for a
+    # run whose inputs moved underneath it, or the artifact would carry proof of a
+    # verification that no longer describes it.
     if bindings(roots) != before:
         raise ValueError('v1 export inputs changed during run')
     if verdict['reasons']:
         raise ValueError('v1 export failed verification: ' + ', '.join(verdict['reasons']))
+    sidecar = write_sidecar(delivery_output, archive=archive, bindings_=before,
+                            verdict=verdict, policy_hash=ledger_result['policy_sha256'],
+                            ledger_manifest_sha256=ledger_result['manifest_sha256'])
     return {
         'verified': True, 'input_bound': True,
         'policy_sha256': ledger_result['policy_sha256'],
@@ -105,7 +112,7 @@ def run_export(roots, policy_path, ledger_output, delivery_output, *, verify=Fal
         'provenance_sha256': sidecar['provenance_sha256'],
         'archive_name': archive['name'], 'archive_sha256': archive['sha256'],
         'archive_entries': archive['entries'],
-        'cases': ledger.counts['completion_records'],
+        'cases': len(source_inventory(roots['source'])),
         'addition_count': ledger.counts['addition_count'],
         'appended_row_count': ledger.counts['appended_row_count'],
         'unresolved_records': ledger.counts['unresolved_records'],
@@ -115,18 +122,53 @@ def run_export(roots, policy_path, ledger_output, delivery_output, *, verify=Fal
 
 
 def verify_export(roots, policy_path, ledger_output, delivery_output):
-    """Re-verify an existing export without writing anything."""
+    """Re-verify an existing export, writing nothing at all.
+
+    The single verification entry point: ``run_export(verify=True)`` delegates here, so
+    there is only one strength of "verify" in the codebase. Every sidecar field is
+    recomputed from the tree in front of it and compared — a sidecar that still matches
+    a digest the tree no longer has is stale evidence, not proof.
+    """
     policy = parse_policy(policy_path)
     before = bindings(roots)
-    verdict = validate_delivery(delivery_output, ledger_root=ledger_output, roots=roots,
-                                policy=policy, archive=source_archive(roots['source']))
-    ledger_result = verify_artifact(ledger_output, expected_bindings=before)
+    reasons = set()
+    try:
+        verify_manifests(roots)
+    except (ValueError, OSError, KeyError, TypeError):
+        # Predictable corruption is a verdict, not a traceback: a verifier a caller
+        # cannot run on a damaged tree is a verifier they cannot use.
+        reasons.add('UPSTREAM_INTEGRITY')
+    reasons |= set(validate_delivery(
+        delivery_output, ledger_root=ledger_output, roots=roots, policy=policy,
+        archive=source_archive(roots['source']))['reasons'])
+    try:
+        ledger_result = verify_artifact(ledger_output, expected_bindings=before)
+    except (ValueError, OSError, KeyError):
+        # A ledger that no longer binds its inputs is a verdict, not a traceback.
+        ledger_result = {'verified': False}
+        reasons.add('LEDGER_BINDING_MISMATCH')
+    root = Path(delivery_output)
     sidecar = json.loads(sidecar_path(delivery_output).read_text())
-    archive = Path(delivery_output) / sidecar['archive_name']
-    if not archive.is_file() or sha256(archive.read_bytes()).hexdigest() != sidecar['archive_sha256']:
-        raise ValueError('v1 export archive does not match its sidecar')
-    return {'verified': not verdict['reasons'], 'structural_status': verdict['structural_status'],
-            'reasons': verdict['reasons'], 'ledger_verified': ledger_result['verified'],
-            'archive_sha256': sidecar['archive_sha256'],
-            'manifest_sha256': sidecar['manifest_sha256'],
-            'provenance_sha256': sidecar['provenance_sha256']}
+    archive = root / sidecar.get('archive_name', '')
+    measured = {
+        'manifest_sha256': sha256((root / 'manifest.json').read_bytes()).hexdigest(),
+        'provenance_sha256': sha256(
+            (root / 'provenance' / PROVENANCE_NAME).read_bytes()).hexdigest(),
+        'policy_sha256': policy_sha256(policy),
+        'protected_inputs_sha256': before,
+        'ledger_manifest_sha256': sha256(
+            (Path(ledger_output) / 'manifest.json').read_bytes()).hexdigest(),
+        'archive_sha256': (sha256(archive.read_bytes()).hexdigest()
+                           if archive.is_file() else None),
+    }
+    for name, actual in measured.items():
+        if sidecar.get(name) != actual:
+            reasons.add('SIDECAR_MISMATCH')
+    if bindings(roots) != before:
+        reasons.add('UPSTREAM_INTEGRITY')
+    return {'verified': not reasons,
+            'structural_status': 'PASS' if not reasons else 'REJECTED',
+            'reasons': sorted(reasons), 'ledger_verified': ledger_result['verified'],
+            'archive_sha256': measured['archive_sha256'],
+            'manifest_sha256': measured['manifest_sha256'],
+            'provenance_sha256': measured['provenance_sha256']}

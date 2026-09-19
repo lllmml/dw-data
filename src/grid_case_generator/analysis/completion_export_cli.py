@@ -9,6 +9,7 @@ this command binds their manifest digests and re-checks them before and after th
 import argparse
 import json
 from pathlib import Path
+import sys
 
 from grid_case_generator.analysis.completion_export import run_export, verify_export
 from grid_case_generator.io.completion_ledger_artifacts import INPUTS
@@ -26,7 +27,13 @@ def main():
     else:
         result = run_export(roots, args.policy, args.ledger, args.output)
     print(json.dumps(result, ensure_ascii=False, sort_keys=True, default=str))
+    # A rejection a script cannot see is a rejection a pipeline will ignore.
+    if not result.get('verified'):
+        print('verification REJECTED: ' + ', '.join(result.get('reasons', [])),
+              file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

@@ -115,8 +115,21 @@ A provenance record may not choose its own test: a row that claims `SOURCE`, or 
 appended row that names a rule which never appends or omits the donor ref it is checked
 against, is rejected rather than checked cheaply. A SOURCE row must mirror its own
 position in its own member, so it cannot call itself a verbatim copy of some other
-matching row. `closure_depth` bounds are checked on every record, but see the known gap
-below — no rule currently walks a closure, so that check is inert on this artifact.
+matching row.
+
+The cross-case expectation is re-derived from the audit, not from the ledger: the nine
+preconditions, the tier gate and the two hard-blocker gates are re-implemented here, and
+the delivery must contain exactly the rows the audit licenses. A ledger that invents or
+drops a reference cannot license its own delivery, and the failure taxonomy must match
+the audit's. Only `PROPOSED` records license a row — `ACCEPTED_DETERMINISTIC_RECOVERY_V1`
+is `CONFIRMED` and appends nothing, though its own evidence is still checked.
+
+Nothing is sampled: every upstream file is re-hashed and every archive entry compared,
+because a sampled check cannot support the claim that the tree is intact. The tree is
+read once per run and the result reused — re-scanning it per member is quadratic, which
+on the real intake is a hung run rather than a slow one. `closure_depth` bounds are
+checked on every record, but see the known gap below — no rule currently walks a closure,
+so that check is inert on this artifact.
 
 The validator shares no code with the engine, so a defect the engine and the writer
 agree on is still caught. Every check it could not run — because a root was not supplied
@@ -129,13 +142,21 @@ provenance sidecar and the archive.
 
 These are open, and a reader should not infer them as done.
 
-1. **Reference closure is not exercised.** The contract specifies that a copied row's own
-   references are followed recursively under `max_reference_closure_depth`, with
-   `CLOSURE_DEPTH_EXCEEDED` / `CLOSURE_PRECONDITION_FAILED` recorded on overflow.
-   `walk_closure` is implemented and unit-tested, but no rule calls it: every record in
-   the current artifact has `closure_depth` 0 or null, and no closure reason is ever
-   emitted. The validator's `CLOSURE_NOT_BOUNDED` is a real check but is inert on this
-   artifact. Either the rule must follow references or the contract must say it does not.
+1. **Reference closure is not implemented, and its semantics are underdetermined.**
+   The contract specifies that a copied row's own references are followed recursively
+   under `max_reference_closure_depth`, with `CLOSURE_DEPTH_EXCEEDED` /
+   `CLOSURE_PRECONDITION_FAILED` recorded on overflow. `walk_closure` is implemented and
+   unit-tested, but no rule calls it: every record carries `closure_depth` 0 (or null),
+   and no closure reason is ever emitted. The validator's `CLOSURE_NOT_BOUNDED` is a real
+   check but is inert on this artifact.
+
+   Measured on the published roots under the shipped policy: wiring the closure adds
+   **one** ledger record and **zero** CSV bytes. That is a measurement of this input, not
+   a demonstration that the contract is met. Three clauses cannot be settled from the
+   shipped artifacts — how a donor-local reference with no audit row is judged, which
+   Case's context governs each level, and the dedup/depth/truncation reporting rules.
+   See `docs/reviews/2026-09-19-nanjing-v1-closure-decision.md` for the options,
+   recommendations and the clauses awaiting confirmation.
 2. **The recovery population's source stream is ambiguous.** `ACCEPTED_DETERMINISTIC_RECOVERY_V1`
    records are read from the D3 analysis stream `accepted_connections.jsonl` — 29,528
    edge additions. The contract names `accepted-topology-v2/additions.jsonl`, which holds

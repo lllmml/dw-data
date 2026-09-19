@@ -203,3 +203,25 @@ def test_building_the_archive_twice_is_idempotent(e2e):
     first = build_archive(root)
     second = build_archive(root)
     assert first == second, 'a second build must not embed the archive inside itself'
+
+
+# --- the sidecar is published only after the inputs are re-checked ---
+
+
+def test_no_pass_sidecar_survives_a_rejected_run(e2e):
+    """The sidecar is the run's own proof; it must not be published before the check."""
+    from grid_case_generator.analysis.completion_export import run_export, sidecar_path
+    run(e2e, 'out')
+    assert json.loads((e2e.tmp_path / 'out-verification.json').read_text())[
+        'bound_verifier'] == 'PASS'
+    # An input file changes under the run: the export must refuse and leave no PASS.
+    (e2e.tmp_path / 'out-verification.json').unlink()
+    audit = Path(e2e.roots['audit'])
+    (audit / 'case_inventory.jsonl').write_bytes(b'{"case_id":"case:x"}\n')
+    try:
+        run_export(e2e.roots, e2e.policy_path, e2e.tmp_path / 'out-ledger',
+                   e2e.tmp_path / 'out')
+    except (ValueError, FileExistsError):
+        pass
+    assert not sidecar_path(e2e.tmp_path / 'out').exists(), \
+        'a refused run must not leave a PASS sidecar'

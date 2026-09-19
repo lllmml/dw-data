@@ -270,8 +270,8 @@ def write_delivery(root, *, archive_path, cases, policy, roots, append_plan=(), 
                                     'rule_version': CROSS_CASE_RULE_VERSION,
                                     'source_record_ref': entry['source_record_ref'],
                                     'donor_source_record_ref': entry['donor_source_record_ref'],
-                                    'raw_field': None,
-                                    'raw_reference_value': None,
+                                    'raw_field': entry['raw_field'],
+                                    'raw_reference_value': entry['raw_reference_value'],
                                     'evidence_refs': list(entry['record_ids'])}))
                 for entry in generated:
                     # render_bus_row emits a terminated record line; the append block

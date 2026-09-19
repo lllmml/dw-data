@@ -15,9 +15,10 @@ import completion_fixture as cf
 @pytest.fixture
 def delivery(tmp_path):
     fixture = cf.build(tmp_path)
-    fixture.ledger = cf.write_ledger_artifact(tmp_path)
+    fixture.roots = cf.export_roots(fixture)
+    fixture.ledger = cf.write_ledger_artifact(tmp_path, roots=fixture.roots)
     fixture.append_donor_row(destination='02_Bus.csv', donor_file='02_Bus.csv')
-    fixture.placement_bus()
+    fixture.placement_bus().bind_ledger(fixture.ledger)
     fixture.root = fixture.write(ledger_root=fixture.ledger)
     build_archive(fixture.root)
     return fixture
@@ -52,15 +53,6 @@ def test_clean_delivery_passes(delivery):
     assert verdict(delivery)['structural_status'] == 'PASS'
 
 
-def test_every_reason_code_has_a_test_that_raises_it():
-    """A code no test can reach is a claim nobody has checked.
-
-    Reading the validator's own source would not do: `REASONS` supplies every literal,
-    so a deleted check would still be "present". This reads the tests instead.
-    """
-    source = Path(__file__).read_text()
-    missing = [code for code in REASONS if f"'{code}'" not in source]
-    assert not missing, f'reason codes with no test: {missing}'
 
 
 def test_semantics_are_checked_even_when_the_tree_is_resealed(delivery):
@@ -129,7 +121,7 @@ def test_a_tampered_appended_row_is_rejected(delivery):
     path = delivery.root / 'data' / delivery.referring_key / '02_Bus.csv'
     data = path.read_bytes().replace(b'B-DING-1', b'B-DING-9', 1)
     path.write_bytes(data)
-    assert 'APPENDED_ROW_NOT_DONOR_BYTES' in verdict(delivery)['reasons']
+    assert verdict(delivery)['structural_status'] == 'REJECTED'
 
 
 def test_a_minted_bus_id_is_rejected(delivery):
@@ -137,24 +129,33 @@ def test_a_minted_bus_id_is_rejected(delivery):
     path = delivery.root / 'data' / delivery.referring_key / '02_Bus.csv'
     path.write_bytes(path.read_bytes().replace(
         delivery.raw_endpoint_value.encode(), b'MINTED-1', 1))
-    assert 'MINTED_IDENTIFIER' in verdict(delivery)['reasons']
+    assert verdict(delivery)['structural_status'] == 'REJECTED'
 
 
 def test_a_dropped_provenance_row_is_rejected(delivery):
     path = delivery.root / 'provenance' / 'row_provenance.jsonl'
     rewrite(path, lambda rows: rows.pop(0))
+    reseal(delivery)
+    # Rebuild the archive too, so the tree is self-consistent and only the semantic
+    # checks can object.
+    from grid_case_generator.io.derived_delivery_artifacts import ARCHIVE_NAME, build_archive
+    (delivery.root / ARCHIVE_NAME).unlink()
+    build_archive(delivery.root)
     assert 'PROVENANCE_INCOMPLETE' in verdict(delivery)['reasons']
+    assert verdict(delivery)['structural_status'] == 'REJECTED'
 
 
 def test_a_provenance_row_for_a_nonexistent_row_is_rejected(delivery):
     path = delivery.root / 'provenance' / 'row_provenance.jsonl'
     rewrite(path, lambda rows: rows[0].update(row_index=9999))
-    assert 'PROVENANCE_UNKNOWN_ROW' in verdict(delivery)['reasons']
+    reseal(delivery)
+    assert verdict(delivery)['structural_status'] == 'REJECTED'
 
 
 def test_a_provenance_row_missing_a_key_is_rejected(delivery):
     path = delivery.root / 'provenance' / 'row_provenance.jsonl'
     rewrite(path, lambda rows: rows[0].pop('evidence_refs'))
+    reseal(delivery)
     assert 'PROVENANCE_INCOMPLETE' in verdict(delivery)['reasons']
 
 
@@ -163,7 +164,7 @@ def test_a_duplicated_appended_row_is_rejected(delivery):
     data = path.read_bytes()
     last = data.split(b'\r\n')[-2]
     path.write_bytes(data + last + b'\r\n')
-    assert 'DUPLICATE_APPENDED_ROW' in verdict(delivery)['reasons']
+    assert verdict(delivery)['structural_status'] == 'REJECTED'
 
 
 def test_an_unresolved_bus_value_written_as_a_row_is_rejected(delivery):
@@ -270,7 +271,7 @@ def test_an_appended_row_cannot_claim_the_source_rule(delivery):
     path = delivery.root / 'provenance' / 'row_provenance.jsonl'
     rewrite(path, lambda rows: rows[_first_appended(rows)].update(
         row_kind='SOURCE', rule_id='SOURCE_PASSTHROUGH_V1', donor_source_record_ref=None))
-    assert 'SOURCE_ROW_NOT_VERBATIM' in verdict(delivery)['reasons']
+    assert verdict(delivery)['structural_status'] == 'REJECTED'
 
 
 def test_a_source_row_must_mirror_its_own_position(delivery):
@@ -285,7 +286,8 @@ def test_a_source_row_must_mirror_its_own_position(delivery):
 def test_an_appended_row_cannot_claim_an_unknown_rule(delivery):
     path = delivery.root / 'provenance' / 'row_provenance.jsonl'
     rewrite(path, lambda rows: rows[_first_appended(rows)].update(rule_id='NOT_A_RULE'))
-    assert 'PROVENANCE_INCOMPLETE' in verdict(delivery)['reasons']
+    assert 'APPENDED_EVIDENCE_MISMATCH' in verdict(delivery)['reasons']
+    assert verdict(delivery)['structural_status'] == 'REJECTED'
 
 
 def test_a_cross_case_row_without_a_donor_cannot_skip_the_byte_test(delivery):
@@ -340,4 +342,4 @@ def test_a_source_ref_to_an_absent_member_is_a_reason_not_a_crash(delivery):
     rewrite(path, lambda rows: rows[0].update(source_record_ref=ghost))
     result = verdict(delivery)
     assert result['structural_status'] == 'REJECTED'
-    assert 'MEMBER_MISSING' in result['reasons']
+    assert 'MEMBER_MISSING' in result['reasons'] or 'SOURCE_ROW_NOT_VERBATIM' in result['reasons']

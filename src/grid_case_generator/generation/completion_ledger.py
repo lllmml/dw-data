@@ -352,6 +352,8 @@ def cross_case_records(inputs: CompletionInputs):
                          'donor_source_record_ref': donor_ref,
                          'source_record_ref': row['source_record_ref'],
                          'tier': rec['tier'],
+                         'raw_field': row['raw_field'],
+                         'raw_reference_value': row['raw_reference_value'],
                          'record_ids': [rec['record_id']]}
         else:
             entry['source_record_ref'] = min(entry['source_record_ref'],
@@ -365,6 +367,8 @@ def cross_case_records(inputs: CompletionInputs):
          'donor_source_record_ref': entry['donor_source_record_ref'],
          'source_record_ref': entry['source_record_ref'],
          'tier': entry['tier'],
+         'raw_field': entry['raw_field'],
+         'raw_reference_value': entry['raw_reference_value'],
          'record_ids': tuple(sorted(entry['record_ids']))}
         for entry in sorted(plan.values(),
                             key=lambda e: (e['destination_member'],

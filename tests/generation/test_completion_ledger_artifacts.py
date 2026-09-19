@@ -230,7 +230,8 @@ def test_rehashed_semantic_tamper_still_fails_replay(tmp_path, inputs):
     root = tmp_path / 'ledger'
     path = root / 'completion_records.jsonl'
     records = [json.loads(line) for line in path.read_bytes().splitlines()]
-    records[0]['completion_status'] = 'CONFIRMED'
+    index = next(i for i, r in enumerate(records) if r['completion_status'] == 'PROPOSED')
+    records[index]['completion_status'] = 'CONFIRMED'
     path.write_bytes(b''.join(canonical_json_bytes(r) + b'\n' for r in records))
     tamper_manifest(root, lambda m: m['files'][path.name].update(
         sha256=sha256(path.read_bytes()).hexdigest()))

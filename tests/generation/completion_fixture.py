@@ -9,6 +9,7 @@ byte here is synthetic; the real intake is never read.
 import csv
 from hashlib import sha256
 import io
+import json
 from dataclasses import replace
 from pathlib import Path
 from zipfile import ZipFile, ZipInfo
@@ -19,7 +20,7 @@ from grid_case_generator.io.canonical_json import canonical_json_bytes
 from grid_case_generator.io.nanjing_source.locator import source_record_ref
 from grid_case_generator.io.nanjing_source.schema import NANJING_SOURCE_SCHEMA as SCHEMA
 from grid_case_generator.models.completion_export import (
-    CROSS_CASE_RULE, PLACEMENT_BUS_RULE, CompletionPolicy)
+    CROSS_CASE_RULE, PLACEMENT_BUS_RULE, RECOVERY_RULE, CompletionPolicy)
 from grid_case_generator.models.identifiers import SourceImportIdFactory as IDs
 
 BOM = b'\xef\xbb\xbf'
@@ -272,12 +273,40 @@ class DeliveryFixture:
         self.policy = policy
         self.roots = roots
         self.placement = placement
+        self.ledger_case_id = IDs.case_id(DATASET, PLACEMENT_CASE_KEY)
         self.append_plan = ()
         self.bus_plan = ()
         self.raw_endpoint_value = None
 
+    def policy_path(self, name='policy.json'):
+        """The fixture's policy as a file, for the CLI-shaped verify entry point."""
+        from grid_case_generator.models.completion_export import policy_bytes
+        path = Path(self.tmp_path) / name
+        path.write_bytes(policy_bytes(self.policy))
+        return path
+
+    def bind_ledger(self, ledger_root):
+        """Cite the ledger artifact's own record ids in the fixture's plans.
+
+        A hand-built plan that cites an invented record id would make the provenance
+        correlation unverifiable, which is exactly what the validator must not accept.
+        """
+        records = [json.loads(line) for line in
+                   (Path(ledger_root) / 'completion_records.jsonl').read_bytes().splitlines()]
+        for rule_id, plan in ((CROSS_CASE_RULE, self.append_plan),
+                              (PLACEMENT_BUS_RULE, self.bus_plan)):
+            owned = [r for r in records
+                     if r['rule_id'] == rule_id and r['case_id'] == self.ledger_case_id]
+            for entry, record in zip(plan, owned):
+                entry['record_ids'] = (record['record_id'],)
+                entry['tier'] = record['tier']
+                entry['raw_field'] = record['raw_field']
+                entry['raw_reference_value'] = record['raw_reference_value']
+        return self
+
     def donor_member(self, filename):
         return f'{self.donor_key}/{filename}'
+
 
     @property
     def bus_member(self):
@@ -321,7 +350,8 @@ class DeliveryFixture:
         return dict(zip(rows[0], rows[-1]))
 
     def append_donor_row(self, destination='03_Switch.csv', donor_file='03_Switch.csv',
-                         tier='SAME_STATION'):
+                         tier='SAME_STATION', raw_field='Switch_FromBus',
+                         raw_reference_value='B-X'):
         donor_ref = source_record_ref(self.donor_member(donor_file), data_row=1)
         referring_ref = source_record_ref(f'{self.referring_key}/{destination}', data_row=1)
         self.append_plan = (
@@ -330,6 +360,8 @@ class DeliveryFixture:
                 'donor_source_record_ref': str(donor_ref),
                 'source_record_ref': str(referring_ref),
                 'tier': tier,
+                'raw_field': raw_field,
+                'raw_reference_value': raw_reference_value,
                 'record_ids': ('v1-completion:ledger:testrecord',),
             },
         )
@@ -354,7 +386,7 @@ class DeliveryFixture:
         return root
 
 
-def build(tmp_path):
+def build(tmp_path, extra_cases=0):
     tmp_path = Path(tmp_path)
     archive = tmp_path / 'source.zip'
     source_root = tmp_path / 'source-root'
@@ -365,7 +397,7 @@ def build(tmp_path):
 
     policy = LEDGER_POLICY
 
-    cases_spec = (
+    cases_spec = tuple(sorted((
         {
             'source_case_key': '数据/丁变_10kV丁线404',
             'rows': _DONOR_ROWS,
@@ -385,7 +417,11 @@ def build(tmp_path):
             'source_case_key': '数据/甲变_10kV甲线101',
             'rows': _POPULATED_ROWS,
         },
-    )
+        # Extra empty Cases, so a test can vary the delivery's size without changing
+        # what the completion rules do.
+        *({'source_case_key': f'数据/填充变_10kV填充线{n:03d}', 'rows': {}}
+          for n in range(extra_cases)),
+    ), key=lambda spec: spec['source_case_key']))
 
     members = []
     cases = []
@@ -449,26 +485,29 @@ def build(tmp_path):
 
 LEDGER_POLICY = CompletionPolicy(
     policy_version='1.1.0', materialize_tiers=('SAME_STATION',),
-    enabled_rules=(CROSS_CASE_RULE, PLACEMENT_BUS_RULE), max_reference_closure_depth=2,
-    placement_endpoint_bus=True)
+    enabled_rules=(RECOVERY_RULE, CROSS_CASE_RULE, PLACEMENT_BUS_RULE),
+    max_reference_closure_depth=2, placement_endpoint_bus=True)
 
 
-def ledger_inputs(*, tiers=('SAME_STATION',), placement=True, voltage=None, cases=2):
+def ledger_inputs(*, tiers=('SAME_STATION',), placement=True, voltage='10.5', cases=2):
     """A small mixed-input ``CompletionInputs``: one cross-case, one cohort, one placement.
 
     Small enough to build in-process, and wide enough that every ledger stream carries a
     row, so an artifact test cannot pass on an empty artifact.
     """
-    case_key = '数据/甲变_10kV甲线101'
-    # The donor must be a Case the synthetic archive actually populates, or the
-    # delivery writer would be asked for a donor row that does not exist.
+    case_key = PLACEMENT_CASE_KEY
+    # The donor must be a Case the synthetic archive actually populates, and its member
+    # must be the one the delivery fixture appends from, or the plan would cite a donor
+    # row the ledger never licensed.
     donor_key = '数据/丁变_10kV丁线404'
+    donor_file = '02_Bus.csv'
     case_id = IDs.case_id(DATASET, case_key)
     donor_id = IDs.case_id(DATASET, donor_key)
-    donor_ref = str(source_record_ref(f'{donor_key}/03_Switch.csv', data_row=1))
+    donor_ref = str(source_record_ref(f'{donor_key}/{donor_file}', data_row=1))
     referring_ref = str(source_record_ref(f'{case_key}/03_Switch.csv', data_row=1))
     audit = ({
-        'case_id': case_id, 'reference_id': 'd4.2-analysis:reference:aaa',
+        'case_id': case_id, 'source_case_key': case_key,
+        'reference_id': 'd4.2-analysis:reference:aaa',
         'source_entity_type': 'SWITCH', 'source_record_ref': referring_ref,
         'raw_field': 'Switch_FromBus', 'raw_reference_value': 'B-X',
         'classification': 'UNIQUE_EXTERNAL_MATCH', 'external_candidate_count': 1,
@@ -484,7 +523,12 @@ def ledger_inputs(*, tiers=('SAME_STATION',), placement=True, voltage=None, case
     policy = replace(LEDGER_POLICY, materialize_tiers=tiers, placement_endpoint_bus=placement)
     inputs = CompletionInputs(
         policy=policy, source_case_key_by_case={case_id: case_key, donor_id: donor_key},
-        audit_rows=audit, accepted_additions=(),
+        audit_rows=audit,
+        accepted_additions=({'case_id': case_id, 'edge_id': 'deterministic-v2:edge:1',
+                             'rule_id': 'LEAF_SWITCH_REPRESENTATION_V2',
+                             'rule_version': '1.0.0',
+                             'supporting_source_refs': [
+                                 str(source_record_ref(f'{case_key}/08_Line.csv', data_row=1))]},),
         placement_proposals=(), endpoint_evidence=(),
         placement_feeders=({'case_id': case_id, 'source_case_key': case_key,
                             'feeder_id': 'feeder:one',
@@ -497,19 +541,24 @@ def ledger_inputs(*, tiers=('SAME_STATION',), placement=True, voltage=None, case
                      {'case_id': donor_id, 'hard_blockers': []}))
     if not placement:
         return inputs
-    placement_inputs = build_placement(case_key=case_key, stations=('S-JIA',),
+    placement_inputs = build_placement(case_key=case_key, stations=('S-BING',),
                                        voltage=voltage, lever=True).inputs
     return replace(inputs, placement_proposals=placement_inputs.placement_proposals,
                    endpoint_evidence=placement_inputs.endpoint_evidence,
                    bus_member_bytes_by_case=placement_inputs.bus_member_bytes_by_case)
 
 
-def write_ledger_artifact(tmp_path, name='ledger', **kwargs):
-    """A small but real ledger artifact, for tests that must bind one."""
-    from grid_case_generator.io.completion_ledger_artifacts import write_artifact
+def write_ledger_artifact(tmp_path, name='ledger', roots=None, **kwargs):
+    """A small but real ledger artifact, for tests that must bind one.
+
+    When the caller has a full root set the artifact binds the real digests, so the
+    delivery built against it and the ledger agree on every upstream.
+    """
+    from grid_case_generator.io.completion_ledger_artifacts import bindings, write_artifact
     root = Path(tmp_path) / name
     inputs = ledger_inputs(**kwargs)
-    write_artifact(inputs, root, {'source': 'a' * 64, 'audit': 'b' * 64})
+    bound = bindings(roots) if roots else {'source': 'a' * 64, 'audit': 'b' * 64}
+    write_artifact(inputs, root, bound)
     return root
 
 
