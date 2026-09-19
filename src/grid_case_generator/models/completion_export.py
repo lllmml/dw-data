@@ -7,7 +7,7 @@ from pathlib import Path
 
 from grid_case_generator.io.canonical_json import canonical_json_bytes
 
-VERSION = '1.1.0'
+VERSION = '1.2.0'
 RULE_VERSION = '1.0.0'
 PLACEMENT_BUS_RULE_VERSION = '1.1.0'
 SCHEMA = 'nanjing_completion_policy_v1'

@@ -1,11 +1,14 @@
-# Nanjing v1 completion and export / 1.1.0
+# Nanjing v1 completion and export / 1.2.0
 
 Revision history: 1.0.0 froze this contract. **1.1.0** incorporates
 [revision 001](revisions/nanjing_v1_completion_export_revision_001.md), which replaces
 four clauses the persisted evidence contradicts: the source of `Bus_BaseKV`, the
 `Bus_Station_ID` inference, the discretionary "derived or left empty" field rule for
-generated Bus rows, and the delivery manifest's relation to its own archive. No rule
-precondition, tier, state, confidence class, policy field or prohibition changed.
+generated Bus rows, and the delivery manifest's relation to its own archive. **1.2.0**
+incorporates [revision 002](revisions/nanjing_v1_completion_export_revision_002.md),
+which quantifies the UNRESOLVED cohort overlap and names the classification-only rule
+that produces that taxonomy. No rule precondition, tier, state, confidence class, policy
+field or prohibition changed in either revision.
 
 This contract defines an independent completion/export layer that produces a
 deliverable v1 derived dataset from the frozen source facts plus the already
@@ -79,6 +82,11 @@ it through policy, but materializing it in v1 would perform the unrestricted glo
 follow that D4.2 documents as unsafe.
 
 ## Rules
+
+Four rules derive or copy data and are defined here. A fifth rule,
+`COHORT_TAXONOMY_V1` / `1.0.0`, produces the UNRESOLVED taxonomy and is defined in that
+section instead, because it is classification-only and materializes nothing — keeping it
+out of this list prevents it being mistaken for a data-producing rule.
 
 ### `SOURCE_PASSTHROUGH_V1` — CONFIRMED, `EXACT_STRUCTURAL`
 
@@ -220,6 +228,54 @@ with its own `reason`, and the report aggregates by reason.
 single candidate, unique identity, type compatible, no explicit voltage conflict, and a
 `CROSS_STATION` candidate. It is a subset of the 136,852 published cross-case references
 and overlaps none of the other reasons.
+
+The four cohort reasons are **not** mutually exclusive. `NO_SOURCE_LINE_LAYOUT_BASIS`
+(1,259 Feeders) is a strict subset of `MANUAL_LAYOUT_REQUIRED` (1,401 Feeders): the
+`SYNTHETIC_BACKBONE_REQUIRED` cohort is 1,402 Feeders, of which 1,259 have no source
+Line, 142 have source Lines, and 1 is `AUTOMATIC_PROPOSAL_ELIGIBLE`. The 1,259 Feeders
+in both cohorts therefore carry **two** `UNRESOLVED` records, one per reason, because
+the two reasons describe genuinely distinct problems and both are reported.
+
+`counts['cohort_overlap_members']` reports the overlap explicitly: it counts distinct
+`(case_id, feeder_id)` identities that appear under more than one reason, so a full run
+reports **1,259**. The overlap key is deliberately **not** `source_record_ref`, which
+embeds the reason and would therefore never show an overlap. Consumers must use this
+count rather than summing the per-reason populations. `TIER_NOT_MATERIALIZED` remains
+disjoint from all four cohort reasons.
+
+### `COHORT_TAXONOMY_V1` / 1.0.0 — classification only
+
+The cohort taxonomy is a rule with its own identity, because it produces ledger records
+and those records must cite what produced them. It is **classification-only**: it
+evaluates the four cohort predicates against the persisted placement and backbone
+artifacts, emits one `UNRESOLVED` / `NONE` record per matching identity, and **never
+materializes anything** — it appends no CSV row, creates no entity, mints no identifier,
+and produces no object any other rule may consume as a topological input.
+`counts['materialized_rows']` is unaffected by it.
+
+Its records carry `rule_id = 'COHORT_TAXONOMY_V1'`, `rule_version = '1.0.0'`,
+`source_entity_type = 'FEEDER'`, `confidence_class = 'NONE'`, and
+`source_record_ref = 'cohort:<reason>:<case_id>:<feeder_id>'`. That last value is a
+ledger-level identifier, not a source locator: the streams' own `feeder_id` is a
+Canonical id and is not passed off as a source row. It is never routed through
+`SourceRecordRef`, which validates the `zip-member:…` form.
+
+| Reason | Stream | Predicate |
+|---|---|---|
+| `INSUFFICIENT_PLACEMENT_EVIDENCE` | `feeder_classification.jsonl` | `primary_status == 'INSUFFICIENT_PLACEMENT_EVIDENCE'` |
+| `NON_UNIQUE_PLACEMENT` | `feeder_classification.jsonl` | `primary_status == 'NON_UNIQUE_PLACEMENT'` |
+| `MANUAL_LAYOUT_REQUIRED` | `feeder_gap_taxonomy.jsonl` | `d3_primary == 'SYNTHETIC_BACKBONE_REQUIRED'` and `outcome == 'MANUAL_LAYOUT_REQUIRED'` |
+| `NO_SOURCE_LINE_LAYOUT_BASIS` | `feeder_gap_taxonomy.jsonl` | the same, and `source_line_count == 0` |
+
+Field names matter here: `feeder_classification.jsonl` keys its verdict as
+`primary_status`, and `feeder_gap_taxonomy.jsonl` carries the D2-derived class in
+`d3_primary` and the D4 verdict in `outcome`. Its `taxonomy_primary` is a different axis
+and contains no `MANUAL_LAYOUT_REQUIRED`.
+
+The rule is **not** a policy lever. Unlike the three inference rules it is absent from
+`enabled_rules`: the taxonomy reports what the evidence already shows, and suppressing
+it would make the delivery's UNRESOLVED section a policy artefact rather than an
+evidence artefact.
 
 The 25 Cases with `GRID_CASE_FEEDER_MISSING` are still delivered with all twelve CSV
 files. Missing Feeder rows are not completion targets of this contract.
@@ -435,7 +491,7 @@ are not asserted as literals in tests.
 
 ## Versioning
 
-Contract and rule-analysis version `1.1.0`, incorporating revision 001. Artifact
+Contract and rule-analysis version `1.2.0`, incorporating revisions 001 and 002. Artifact
 directories `completion-ledger-v1` and `derived-delivery-v1` — the `-v1` suffix denotes
 the first published generation of this contract family, not the contract version, and no
 artifact was ever published under 1.0.0. Generated-ID namespaces
