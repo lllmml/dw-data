@@ -4,6 +4,7 @@ from grid_case_generator.generation.completion_ledger import (
     order_records, order_unresolved, record, walk_closure,
 )
 from grid_case_generator.models.completion_export import parse_policy
+import completion_fixture as cf
 
 EXPECTED_KEYS = {
     'record_id', 'completion_status', 'confidence_class', 'tier', 'rule_id',
@@ -598,3 +599,212 @@ def test_cross_case_is_gated_by_the_policy():
     assert not ledger.completion_records
     assert not ledger.unresolved_records
     assert ledger.append_plan == ()
+
+
+# --- PLACEMENT_MISSING_ENDPOINT_BUS_V1 ---------------------------------------
+
+
+def _placement(**kwargs):
+    return cf.build_placement(**kwargs)
+
+
+def test_bus_id_is_the_source_declared_endpoint_verbatim():
+    fixture = _placement()
+    record, = fixture.ledger.completion_records
+    assert fixture.rendered(record)['Bus_ID'] == fixture.raw_endpoint_value
+
+
+def test_one_row_per_distinct_raw_value_not_per_port():
+    fixture = _placement(ports=3, shared_raw_value=True)
+    assert len(fixture.ledger.completion_records) == 1
+
+
+def test_distinct_raw_values_get_distinct_rows():
+    fixture = _placement(ports=3, shared_raw_value=False)
+    rows = fixture.ledger.completion_records
+    assert len(rows) == 3
+    assert len({fixture.rendered(r)['Bus_ID'] for r in rows}) == 3
+
+
+def test_absent_voltage_is_null_not_a_substitute():
+    fixture = _placement(voltage=None)
+    record, = fixture.ledger.completion_records
+    assert record['confidence_class'] == 'ENGINEERING_DEFAULT'
+    assert record['completion_status'] == 'PROPOSED'
+    assert fixture.fields(record)['Bus_BaseKV'] is None
+    assert fixture.rendered(record)['Bus_BaseKV'] == ''
+    assert 'VOLTAGE_EVIDENCE_ABSENT' in fixture.assumptions(record)
+
+
+def test_no_station_context_is_ever_substituted():
+    # The station is the one piece of Case context the rule reads, and it reaches only
+    # Bus_Station_ID. A Case nominal voltage, a station name and the directory name have
+    # no field on CompletionInputs at all, so no clause can substitute them.
+    fixture = _placement(stations=['1139'], voltage=None)
+    record, = fixture.ledger.completion_records
+    values = fixture.fields(record)
+    assert values['Bus_Station_ID'] == '1139'
+    assert values['Bus_BaseKV'] is None
+    assert values['Bus_Name'] is None
+    assert values['Bus_Phase'] is None
+    assert values['Bus_IsSource'] is None
+
+
+def test_a_field_without_evidence_is_null_not_derived():
+    fixture = _placement(voltage='10.5', stations=['1139'])
+    values = fixture.fields(fixture.ledger.completion_records[0])
+    assert values['Bus_BaseKV'] == '10.5'
+    assert values['Bus_Station_ID'] == '1139'
+    assert values['Bus_Name'] is None
+    assert values['Bus_Phase'] is None
+    assert values['Bus_IsSource'] is None
+
+
+def test_conflicting_voltage_is_never_resolved_by_ordering():
+    a = _placement(voltage=['10.5', '20'])
+    b = _placement(voltage=['20', '10.5'])
+    assert a.rendered(a.ledger.completion_records[0])['Bus_BaseKV'] == ''
+    assert a.ledger.unresolved_records[0]['reason'] == 'VOLTAGE_EVIDENCE_CONFLICT'
+    assert a.ledger.completion_records == b.ledger.completion_records
+    assert a.ledger.unresolved_records == b.ledger.unresolved_records
+    assert a.ledger.bus_plan == b.ledger.bus_plan
+
+
+def test_ambiguous_station_leaves_the_field_empty():
+    fixture = _placement(stations=['1139', '3800'])
+    record, = fixture.ledger.completion_records
+    assert fixture.rendered(record)['Bus_Station_ID'] == ''
+    assert 'STATION_EVIDENCE_NOT_UNIQUE' in fixture.assumptions(record)
+
+
+def test_a_header_only_bus_member_has_no_station_evidence():
+    fixture = cf.build_placement(stations=())
+    record, = fixture.ledger.completion_records
+    assert fixture.rendered(record)['Bus_Station_ID'] == ''
+    assert 'STATION_EVIDENCE_NOT_UNIQUE' in fixture.assumptions(record)
+
+
+def test_a_case_absent_from_the_bus_inventory_has_no_station_evidence():
+    # The measured "20 Cases with no 02_Bus.csv at all" reach the same answer as a
+    # member carrying no value: no single distinct value exists, so no station is chosen.
+    fixture = cf.build_placement()
+    ledger = build_ledger(fixture.inputs_with(bus_member_bytes_by_case={}))
+    record, = ledger.completion_records
+    assert fixture.rendered(record, ledger)['Bus_Station_ID'] == ''
+    assert 'STATION_EVIDENCE_NOT_UNIQUE' in fixture.assumptions(record, ledger)
+
+
+def test_single_station_is_copied_verbatim():
+    fixture = _placement(stations=['1139'])
+    assert fixture.rendered(fixture.ledger.completion_records[0])['Bus_Station_ID'] == '1139'
+
+
+def test_evidence_join_mismatch_keeps_the_record_unresolved():
+    fixture = _placement(join_mismatch=True)
+    assert not fixture.ledger.completion_records
+    assert not fixture.ledger.bus_plan
+    assert fixture.ledger.unresolved_records[0]['reason'] == 'EVIDENCE_JOIN_MISMATCH'
+
+
+def test_accepted_node_endpoints_are_not_unresolved():
+    # The placement rule re-derives no placement: an endpoint the D4.1 proposal already
+    # anchored on an accepted node needs no Bus row, because a Case-local row supplies it.
+    built = cf.build_placement()
+    proposals = ({'proposal_id': 'p', 'case_id': built.case_id, 'feeder_id': 'f',
+                  'source_line_id': 'L',
+                  'source_line_record_ref': 'zip-member:case/08_Line.csv#data-row=1',
+                  'endpoints': [{'side': 1, 'anchor_id': 'n1', 'anchor_origin': 'ACCEPTED_NODE',
+                                 'raw_endpoint_value': 'B-A'},
+                                {'side': 2, 'anchor_id': 'n2', 'anchor_origin': 'ACCEPTED_NODE',
+                                 'raw_endpoint_value': 'B-B'}]},)
+    ledger = build_ledger(CompletionInputs(
+        policy=built.policy, source_case_key_by_case={built.case_id: built.case_key},
+        audit_rows=(), accepted_additions=(), placement_proposals=proposals,
+        endpoint_evidence=(), placement_feeders=(), backbone_taxonomy=(),
+        audit_classification=(), audit_cases=()))
+    assert not ledger.completion_records
+    assert not ledger.unresolved_records
+    assert ledger.counts['addition_count'] == 0
+
+
+@pytest.mark.parametrize('rule_enabled,lever', [(False, True), (True, False), (False, False)])
+def test_placement_is_gated_by_the_rule_and_by_its_lever(rule_enabled, lever):
+    # Two independent gates: the rule must be enabled AND the policy lever must be on,
+    # so each alone leaves the rule with no records and no rows.
+    off = _placement(rule_enabled=rule_enabled, lever=lever)
+    assert not off.ledger.completion_records
+    assert not off.ledger.unresolved_records
+    assert off.ledger.bus_plan == ()
+    assert off.ledger.counts['addition_count'] == 0
+    assert off.ledger.counts['appended_row_count'] == 0
+
+
+def test_placement_counts_match_the_rows_it_writes():
+    fixture = _placement(ports=3, shared_raw_value=False)
+    counts = fixture.ledger.counts
+    assert counts['addition_count'] == 3
+    assert counts['appended_row_count'] == 3
+    assert len(fixture.ledger.bus_plan) == 3
+
+
+def test_the_voltage_join_does_not_collide_two_cases_sharing_a_line_id():
+    # Line_ID is unique within a Case, not across the artifact's Cases. A key of
+    # (source_line_id, endpoint_side) alone would let one Case's evidence answer for
+    # another's, turning a conflict into a silent value or hiding one entirely.
+    here = cf.build_placement(voltage='10.5')
+    there_case_id = cf.IDs.case_id(cf.DATASET, '数据/丁变_10kV丁线404')
+    elsewhere = {'case_id': there_case_id, 'source_line_id': 'L-GEN-0',
+                 'endpoint_side': 1, 'raw_endpoint_value': 'B-GEN-1',
+                 'voltage_evidence': '20'}
+    ledger = build_ledger(here.inputs_with(
+        endpoint_evidence=here.inputs.endpoint_evidence + (elsewhere,)))
+    record, = ledger.completion_records
+    # The referring Case keeps its own 10.5 rather than inheriting the other Case's 20,
+    # which would have read as a conflict against the other Case's evidence.
+    assert here.fields(record, ledger)['Bus_BaseKV'] == '10.5'
+    assert not ledger.unresolved_records
+
+
+def test_placement_bus_records_matches_the_ledger_completion_records():
+    # The documented entry point and the assembled ledger must agree field for field;
+    # build_ledger sorts, so the comparison sorts the rule's own emission order too.
+    from grid_case_generator.generation.completion_ledger import placement_bus_records
+    fixture = cf.build_placement(ports=3, shared_raw_value=False)
+    assert order_records(placement_bus_records(fixture.inputs)) == \
+        fixture.ledger.completion_records
+
+
+def test_a_plan_entry_carries_the_tier_of_the_record_it_materializes():
+    # With both tiers materialized the same rule emits both, so the plan entry, not a
+    # writer-side literal, is what tells the delivery which tier a row has.
+    from grid_case_generator.models.completion_export import CompletionPolicy
+    policy = CompletionPolicy(
+        policy_version='1.1.0', materialize_tiers=('SAME_STATION', 'CROSS_STATION'),
+        enabled_rules=('CROSS_CASE_REFERENCE_COPY_V1',), max_reference_closure_depth=2,
+        placement_endpoint_bus=False)
+    ledger = build_ledger(cohort_inputs(
+        audit=[cross_case_row(case='case:A', donor='case:D')],
+        audit_cases=[case_inventory('case:A'), case_inventory('case:D')],
+        case_keys={'case:A': 'dir/a', 'case:D': 'dir/d'}, policy=policy))
+    record, = ledger.completion_records
+    entry, = ledger.append_plan
+    assert record['tier'] == 'SAME_STATION'
+    assert entry['tier'] == record['tier']
+
+
+def test_a_partly_null_voltage_group_copies_the_one_value_it_has():
+    # Pinned deliberately: "exactly one distinct non-null value across the group" is the
+    # rule, so a null occurrence neither vetoes the value nor becomes a conflict. The
+    # alternative reading — every occurrence must agree — is not what the plan specifies,
+    # and v1 cannot tell them apart because all 565 real groups are entirely null.
+    fixture = cf.build_placement(voltage=[None, '10.5', None])
+    record, = fixture.ledger.completion_records
+    assert fixture.fields(record)['Bus_BaseKV'] == '10.5'
+    assert fixture.assumptions(record) == []
+
+
+def test_a_group_with_two_distinct_voltages_reports_the_conflict():
+    fixture = cf.build_placement(voltage=['10.5', '20'])
+    record, = fixture.ledger.completion_records
+    assert fixture.fields(record)['Bus_BaseKV'] is None
+    assert fixture.assumptions(record) == ['VOLTAGE_EVIDENCE_CONFLICT']

@@ -8,12 +8,16 @@ byte here is synthetic; the real intake is never read.
 """
 import csv
 import io
+from dataclasses import replace
 from pathlib import Path
 from zipfile import ZipFile
 
+from grid_case_generator.generation.completion_ledger import (
+    PLACEMENT_BUS_COLUMNS, CompletionInputs, build_ledger, render_bus_row)
 from grid_case_generator.io.nanjing_source.locator import source_record_ref
 from grid_case_generator.io.nanjing_source.schema import NANJING_SOURCE_SCHEMA as SCHEMA
-from grid_case_generator.models.completion_export import CompletionPolicy
+from grid_case_generator.models.completion_export import (
+    CROSS_CASE_RULE, PLACEMENT_BUS_RULE, CompletionPolicy)
 from grid_case_generator.models.identifiers import SourceImportIdFactory as IDs
 
 BOM = b'\xef\xbb\xbf'
@@ -63,6 +67,12 @@ _POPULATED_ROWS = {
 }
 
 _EDGE_ROWS = {
+    # One Bus row, so the Case has exactly one distinct non-empty Bus_Station_ID and
+    # the placement rule's station join has positive evidence to copy.
+    'BUS': [
+        {'Bus_ID': 'B-BING-0', 'Bus_Name': '丙母线零', 'Bus_BaseKV': '10.5', 'Bus_Phase': 'ABC',
+         'Bus_Station_ID': 'S-BING', 'Bus_IsSource': 'true'},
+    ],
     'DISCONNECTOR': [
         {'Disconnector_ID': 'D-BING-1', 'Disconnector_FromBus': 'B-BING-1',
          'Disconnector_ToBus': 'B-BING-2', 'Disconnector_NormalState': 'open'},
@@ -92,6 +102,19 @@ _DONOR_ROWS = {
          'Bus_Station_ID': 'S-DING', 'Bus_IsSource': 'true'},
     ],
 }
+
+
+def _schema(filename):
+    return next(s for s in SCHEMA.files if s.filename == filename)
+
+
+def bus_member_bytes(stations=()):
+    """A synthetic ``02_Bus.csv``: BOM, header, one row per station value given."""
+    schema = _schema('02_Bus.csv')
+    rows = [{'Bus_ID': f'B-STATION-{n}', 'Bus_Name': '', 'Bus_BaseKV': '10.5',
+             'Bus_Phase': 'ABC', 'Bus_Station_ID': station, 'Bus_IsSource': 'false'}
+            for n, station in enumerate(stations, 1)]
+    return _ordinary_bytes(schema, rows)
 
 
 def _ordinary_bytes(schema, rows):
@@ -133,6 +156,102 @@ def _quoted_bytes(schema, rows):
     return BOM + '\r\n'.join(_lines(schema, rows, quote=True)).encode('utf-8')
 
 
+PLACEMENT_CASE_KEY = '数据/丙变_10kV丙线303'
+PLACEMENT_CASE_ID = IDs.case_id(DATASET, PLACEMENT_CASE_KEY)
+
+
+class PlacementFixture:
+    """A ``Ledger`` over synthetic D4.1 proposals, plus the accessors the tests need.
+
+    ``ports`` are ``(proposal, endpoint side)`` pairs, because a proposal declares
+    exactly two endpoint sides. Every one of them is non-``ACCEPTED_NODE``, so every
+    one of them is unresolved and needs the Bus row its source declaration names.
+    """
+
+    def __init__(self, ledger, inputs, raw_endpoint_value, case_id, case_key):
+        self.ledger = ledger
+        self.inputs = inputs
+        self.raw_endpoint_value = raw_endpoint_value
+        self.case_id = case_id
+        self.case_key = case_key
+
+    @property
+    def policy(self):
+        return self.inputs.policy
+
+    def inputs_with(self, **overrides):
+        """These inputs with fields replaced, for a test that perturbs exactly one."""
+        return replace(self.inputs, **overrides)
+
+    def fields(self, record, ledger=None):
+        """The generated Bus row's ledger values, nulls included."""
+        for entry in (ledger or self.ledger).bus_plan:
+            if record['record_id'] in entry['record_ids']:
+                return entry['values']
+        raise AssertionError('no bus plan entry cites this record')
+
+    def rendered(self, record, ledger=None):
+        """The generated Bus row as the CSV re-parses it: nulls are empty fields."""
+        text = render_bus_row(self.fields(record, ledger)).decode('utf-8')
+        return dict(zip(PLACEMENT_BUS_COLUMNS,
+                        next(csv.reader(io.StringIO(text, newline='')))))
+
+    def assumptions(self, record, ledger=None):
+        """Every reason the row's own group recorded for a field it left null."""
+        return sorted({r['reason'] for r in (ledger or self.ledger).unresolved_records
+                       if r['rule_id'] == PLACEMENT_BUS_RULE
+                       and r['case_id'] == record['case_id']
+                       and r['raw_reference_value'] == record['raw_reference_value']})
+
+
+def build_placement(*, ports=None, shared_raw_value=True, voltage='10.5', stations=('1139',),
+                    join_mismatch=False, case_key=PLACEMENT_CASE_KEY, rule_enabled=True,
+                    lever=True):
+    """Build a placement ledger. ``voltage`` is per port: a scalar, ``None``, or a list."""
+    if ports is None:
+        ports = len(voltage) if isinstance(voltage, list) else 1
+    values = ['B-GEN-1'] if shared_raw_value else [f'B-GEN-{n}' for n in range(1, ports + 1)]
+    assignments = [(n // 2, n % 2 + 1, values[0] if shared_raw_value else values[n])
+                   for n in range(ports)]
+    case_id = IDs.case_id(DATASET, case_key)
+
+    def line_ref(proposal_index):
+        return str(source_record_ref(f'{case_key}/08_Line.csv', data_row=proposal_index + 1))
+
+    proposals = []
+    evidence = []
+    for proposal_index in sorted({a[0] for a in assignments}):
+        endpoints = [{'side': side, 'anchor_id': f'port-{proposal_index}-{side}',
+                      'anchor_origin': 'LINE_PLACEMENT_PROPOSAL_V1',
+                      'raw_endpoint_value': value}
+                     for index, side, value in assignments if index == proposal_index]
+        proposals.append({
+            'proposal_id': f'line-proposal-{proposal_index}', 'case_id': case_id,
+            'feeder_id': 'feeder-generic', 'source_line_id': f'L-GEN-{proposal_index}',
+            'source_line_record_ref': line_ref(proposal_index), 'endpoints': endpoints})
+    for index, (proposal_index, side, value) in enumerate(assignments):
+        if join_mismatch:
+            recorded = f'B-OTHER-{proposal_index}'
+        else:
+            recorded = value
+        evidence.append({
+            'case_id': case_id, 'source_line_id': f'L-GEN-{proposal_index}',
+            'endpoint_side': side, 'raw_endpoint_value': recorded,
+            'voltage_evidence': voltage[index] if isinstance(voltage, list) else voltage})
+
+    policy = CompletionPolicy(
+        policy_version='1.1.0', materialize_tiers=('SAME_STATION',),
+        enabled_rules=(PLACEMENT_BUS_RULE,) if rule_enabled else (CROSS_CASE_RULE,),
+        max_reference_closure_depth=2, placement_endpoint_bus=lever)
+    inputs = CompletionInputs(
+        policy=policy, source_case_key_by_case={case_id: case_key}, audit_rows=(),
+        accepted_additions=(), placement_proposals=tuple(proposals),
+        endpoint_evidence=tuple(evidence), placement_feeders=(), backbone_taxonomy=(),
+        audit_classification=(), audit_cases=(),
+        bus_member_bytes_by_case={case_id: bus_member_bytes(stations)})
+    return PlacementFixture(build_ledger(inputs), inputs, values[0], case_id, case_key)
+
+
 class DeliveryFixture:
     def __init__(self, tmp_path, archive, roots, members, cases, source_row_count,
                  feederless_key, referring_key, donor_key, lf_member, no_trailing_member,
@@ -151,11 +270,55 @@ class DeliveryFixture:
         self.quoted_member = quoted_member
         self.policy = policy
         self.append_plan = ()
+        self.bus_plan = ()
+        self.raw_endpoint_value = None
 
     def donor_member(self, filename):
         return f'{self.donor_key}/{filename}'
 
-    def append_donor_row(self, destination='03_Switch.csv', donor_file='03_Switch.csv'):
+    @property
+    def bus_member(self):
+        return f'{self.referring_key}/02_Bus.csv'
+
+    @property
+    def bus_member_bytes(self):
+        with ZipFile(self.archive) as archive:
+            return archive.read(self.bus_member)
+
+    @property
+    def bus_header(self):
+        return next(csv.reader(io.StringIO(self.bus_member_bytes.decode('utf-8-sig'),
+                                           newline='')))
+
+    @property
+    def bus_stations(self):
+        """The referring Case's own Bus_Station_ID values, as the rule would read them."""
+        header = self.bus_header
+        rows = list(csv.reader(io.StringIO(self.bus_member_bytes.decode('utf-8-sig'),
+                                           newline='')))
+        index = header.index('Bus_Station_ID')
+        return tuple(row[index] for row in rows[1:] if len(row) > index and row[index])
+
+    def placement_bus(self, **kwargs):
+        """Attach a placement bus plan for the referring Case to the next write.
+
+        The station evidence is read back out of the delivered member rather than
+        passed in, so the fixture exercises the same join the pipeline performs.
+        """
+        kwargs.setdefault('stations', self.bus_stations)
+        placement = build_placement(case_key=self.referring_key, **kwargs)
+        self.bus_plan = placement.ledger.bus_plan
+        self.raw_endpoint_value = placement.raw_endpoint_value
+        return self
+
+    def reparsed_last_bus_row(self):
+        root = self.tmp_path / 'delivery'
+        data = (root / 'data' / self.bus_member).read_bytes()
+        rows = list(csv.reader(io.StringIO(data.decode('utf-8-sig'), newline='')))
+        return dict(zip(rows[0], rows[-1]))
+
+    def append_donor_row(self, destination='03_Switch.csv', donor_file='03_Switch.csv',
+                         tier='SAME_STATION'):
         donor_ref = source_record_ref(self.donor_member(donor_file), data_row=1)
         referring_ref = source_record_ref(f'{self.referring_key}/{destination}', data_row=1)
         self.append_plan = (
@@ -163,9 +326,11 @@ class DeliveryFixture:
                 'destination_member': f'{self.referring_key}/{destination}',
                 'donor_source_record_ref': str(donor_ref),
                 'source_record_ref': str(referring_ref),
+                'tier': tier,
                 'record_ids': ('v1-completion:ledger:testrecord',),
             },
         )
+        return self
 
     def write_args(self):
         return {
@@ -174,6 +339,7 @@ class DeliveryFixture:
             'policy': self.policy,
             'roots': self.roots,
             'append_plan': self.append_plan,
+            'bus_plan': self.bus_plan,
         }
 
     def write(self, **overrides):

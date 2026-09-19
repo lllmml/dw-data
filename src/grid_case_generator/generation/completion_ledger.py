@@ -5,23 +5,29 @@ Implemented rule families: ``ACCEPTED_DETERMINISTIC_RECOVERY_V1`` emits one
 ``COHORT_TAXONOMY_V1`` is classification-only, emitting ``UNRESOLVED`` records
 that never materialize a row; ``CROSS_CASE_REFERENCE_COPY_V1`` copies a donor
 Case's source row into the referring Case under its nine preconditions, emitting
-``PROPOSED``/``UNIQUE_EVIDENCE`` records plus a de-duplicated append plan.
-``PLACEMENT_MISSING_ENDPOINT_BUS_V1`` arrives in a later slice. The module
-performs no IO: ``build_ledger`` receives already-loaded rows and returns the
-assembled ledger.
+``PROPOSED``/``UNIQUE_EVIDENCE`` records plus a de-duplicated append plan;
+``PLACEMENT_MISSING_ENDPOINT_BUS_V1`` declares one ``PROPOSED``/
+``ENGINEERING_DEFAULT`` Bus row per distinct unresolved endpoint value, emitting
+a bus plan the delivery writer renders. The module performs no filesystem or
+network IO: ``build_ledger`` receives already-loaded rows, and the referring
+Case's ``02_Bus.csv`` bytes, and returns the assembled ledger.
 
 Forward constraint for Slices 4-7: ``record_id`` hashes ``evidence_refs`` in
 list order, so any rule assembling ``evidence_refs`` from a set or dict must
 sort it first, or record identity will churn between runs.
 """
+import csv
+import io
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import MappingProxyType
 
 from grid_case_generator.io.canonical_json import canonical_json_bytes
 from grid_case_generator.io.source_bytes import member_path_of
 from grid_case_generator.models.completion_export import (
-    CROSS_CASE_RULE, CROSS_CASE_RULE_VERSION, RECOVERY_RULE, CompletionPolicy,
-    ledger_id, policy_sha256)
+    CROSS_CASE_RULE, CROSS_CASE_RULE_VERSION, PLACEMENT_BUS_RULE,
+    PLACEMENT_BUS_RULE_VERSION, RECOVERY_RULE, CompletionPolicy, ledger_id,
+    policy_sha256)
 
 RECORD_KEYS = ('record_id', 'completion_status', 'confidence_class', 'tier', 'rule_id',
     'rule_version', 'case_id', 'source_case_key', 'source_entity_type',
@@ -39,6 +45,20 @@ PLACEMENT_COHORT_REASONS = ('INSUFFICIENT_PLACEMENT_EVIDENCE', 'NON_UNIQUE_PLACE
 BACKBONE_COHORT_REASONS = ('MANUAL_LAYOUT_REQUIRED', 'NO_SOURCE_LINE_LAYOUT_BASIS')
 COHORT_REASONS = PLACEMENT_COHORT_REASONS + BACKBONE_COHORT_REASONS
 
+# ``PLACEMENT_MISSING_ENDPOINT_BUS_V1``. The generated row's column order is the
+# source ``02_Bus.csv`` header's own order, so the delivery renders a row the source
+# format would have accepted.
+PLACEMENT_BUS_COLUMNS = ('Bus_ID', 'Bus_Name', 'Bus_BaseKV', 'Bus_Phase',
+                         'Bus_Station_ID', 'Bus_IsSource')
+PLACEMENT_ASSUMPTIONS = ('NOT_A_NEW_LINE_DEVICE',)
+LINE_ENDPOINT_FIELDS = ('Line_FromBus', 'Line_ToBus')
+PLACEMENT_BUS_FILE = '02_Bus.csv'
+VOLTAGE_ABSENT = 'VOLTAGE_EVIDENCE_ABSENT'
+VOLTAGE_CONFLICT = 'VOLTAGE_EVIDENCE_CONFLICT'
+STATION_NOT_UNIQUE = 'STATION_EVIDENCE_NOT_UNIQUE'
+EVIDENCE_JOIN_MISMATCH = 'EVIDENCE_JOIN_MISMATCH'
+ACCEPTED_NODE = 'ACCEPTED_NODE'
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CompletionInputs:
@@ -52,6 +72,8 @@ class CompletionInputs:
     backbone_taxonomy: tuple[dict, ...]
     audit_classification: tuple[dict, ...]
     audit_cases: tuple[dict, ...]
+    bus_member_bytes_by_case: Mapping[str, bytes] = field(
+        default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -61,6 +83,7 @@ class Ledger:
     case_summary: tuple[dict, ...]
     counts: dict
     append_plan: tuple[dict, ...]
+    bus_plan: tuple[dict, ...] = ()
 
 
 def record(**fields) -> dict:
@@ -255,10 +278,10 @@ def eligible(row, tiers, cases):
     return True, ''
 
 
-def _cross_case_source_case_key(inputs, case_id):
+def _source_case_key(inputs, case_id, context):
     key = inputs.source_case_key_by_case.get(case_id)
     if key is None:
-        raise ValueError(f'v1 ledger unknown case {case_id!r} in cross-case references')
+        raise ValueError(f'v1 ledger unknown case {case_id!r} in {context}')
     return key
 
 
@@ -286,7 +309,7 @@ def cross_case_records(inputs: CompletionInputs):
     for row in inputs.audit_rows:
         ok, reason = eligible(row, tiers, cases)
         candidate = (row.get('candidates') or [None])[0]
-        source_case_key = _cross_case_source_case_key(inputs, row['case_id'])
+        source_case_key = _source_case_key(inputs, row['case_id'], 'cross-case references')
         if not ok:
             tier = (candidate['station_relationship']
                     if reason == 'TIER_NOT_MATERIALIZED' else None)
@@ -322,18 +345,26 @@ def cross_case_records(inputs: CompletionInputs):
         key = (destination_member, donor_ref)
         entry = plan.get(key)
         if entry is None:
+            # ``tier`` travels with the plan because the writer cannot derive it: with
+            # more than one materialized tier the same rule emits both, so a literal in
+            # the writer would report the wrong tier for a delivered row.
             plan[key] = {'destination_member': destination_member,
                          'donor_source_record_ref': donor_ref,
                          'source_record_ref': row['source_record_ref'],
+                         'tier': rec['tier'],
                          'record_ids': [rec['record_id']]}
         else:
             entry['source_record_ref'] = min(entry['source_record_ref'],
                                              row['source_record_ref'])
             entry['record_ids'].append(rec['record_id'])
+    # Merged entries necessarily agree on ``tier``: a shared destination member fixes
+    # the referring Case's key, and a shared donor ref fixes the donor Case's, so both
+    # references were audited against the same pair of Cases.
     append_plan = tuple(
         {'destination_member': entry['destination_member'],
          'donor_source_record_ref': entry['donor_source_record_ref'],
          'source_record_ref': entry['source_record_ref'],
+         'tier': entry['tier'],
          'record_ids': tuple(sorted(entry['record_ids']))}
         for entry in sorted(plan.values(),
                             key=lambda e: (e['destination_member'],
@@ -341,15 +372,184 @@ def cross_case_records(inputs: CompletionInputs):
     return tuple(completion), tuple(unresolved), append_plan
 
 
-def _completion_records(inputs: CompletionInputs, cross: tuple) -> tuple:
+def station_value(bus_member_bytes) -> str | None:
+    """Return the Case's single distinct non-empty ``Bus_Station_ID``, else ``None``.
+
+    ``None`` means "no unambiguous evidence", which the rule records as
+    ``STATION_EVIDENCE_NOT_UNIQUE``. It is never a tie-break: when several values are
+    present, no ordering, proximity or name-similarity rule picks one. A member with
+    no such column, or with no member bytes at all, is the same case.
+    """
+    if not bus_member_bytes:
+        return None
+    rows = list(csv.reader(io.StringIO(bus_member_bytes.decode('utf-8-sig'), newline='')))
+    if not rows or 'Bus_Station_ID' not in rows[0]:
+        return None
+    index = rows[0].index('Bus_Station_ID')
+    values = {row[index] for row in rows[1:] if len(row) > index and row[index]}
+    return values.pop() if len(values) == 1 else None
+
+
+def render_bus_row(values: Mapping) -> bytes:
+    """Serialize one generated Bus row: CRLF-terminated, columns in source order.
+
+    ``None`` is the ledger's and the sidecar's representation of an absent value and is
+    mapped to an empty field here, at the serialization boundary only, which is the
+    source format's own representation of absence.
+    """
+    missing = [name for name in PLACEMENT_BUS_COLUMNS if name not in values]
+    if missing:
+        raise ValueError(f'v1 placement bus row missing column {missing[0]!r}')
+    unknown = [name for name in values if name not in PLACEMENT_BUS_COLUMNS]
+    if unknown:
+        raise ValueError(f'v1 placement bus row unknown column {unknown[0]!r}')
+    stream = io.StringIO(newline='')
+    writer = csv.writer(stream, lineterminator='\r\n')
+    writer.writerow(['' if values[name] is None else values[name]
+                     for name in PLACEMENT_BUS_COLUMNS])
+    return stream.getvalue().encode('utf-8')
+
+
+def _placement_ports(inputs: CompletionInputs) -> dict:
+    """Group every non-accepted-node endpoint by ``(case_id, raw_endpoint_value)``.
+
+    The group, not the port and not the proposal, is the rule's unit: one Bus row is
+    written per group even when several ports or several proposals declare the same
+    value. Grouping is per Case because the row lands in *that* Case's ``02_Bus.csv``.
+    """
+    groups = {}
+    for proposal in inputs.placement_proposals:
+        for endpoint in proposal['endpoints']:
+            if endpoint['anchor_origin'] == ACCEPTED_NODE:
+                continue
+            side = endpoint['side']
+            if side not in (1, 2):
+                raise ValueError(f'v1 placement endpoint side: {side!r} (1 or 2)')
+            port = {
+                'source_line_id': proposal['source_line_id'],
+                'source_line_record_ref': proposal['source_line_record_ref'],
+                'endpoint_side': side,
+                'proposal_id': proposal['proposal_id'],
+                'anchor_id': endpoint['anchor_id'],
+            }
+            key = (proposal['case_id'], endpoint['raw_endpoint_value'])
+            groups.setdefault(key, {})[(proposal['proposal_id'], side)] = port
+    return groups
+
+
+def _endpoint_evidence_locator(source_line_id, side) -> str:
+    return f'line_endpoint_evidence.jsonl/{source_line_id}:{side}'
+
+
+def _placement_bus(inputs: CompletionInputs) -> tuple:
+    """Return ``(completion_records, unresolved_records, bus_plan)`` for the rule.
+
+    Gated twice, as the contract states: the rule must be in ``enabled_rules`` and the
+    ``placement_endpoint_bus`` policy lever must be on. Every port in a group is
+    cross-checked against ``line_endpoint_evidence.jsonl`` before any value is copied;
+    a disagreement is ``EVIDENCE_JOIN_MISMATCH`` and the group materializes nothing,
+    because the join is what licenses the identity the row would carry. A value the
+    evidence does not support stays null, and the null is reported as its own
+    ``UNRESOLVED`` record: a materialized ledger record carries a null ``reason``, so
+    the reason a field is empty can only live on an ``UNRESOLVED`` record.
+    """
+    if (PLACEMENT_BUS_RULE not in inputs.policy.enabled_rules
+            or not inputs.policy.placement_endpoint_bus):
+        return (), (), ()
+    # The join key carries ``case_id`` even though the contract names only the line and
+    # the side: ``Line_ID`` is unique within a Case, not across the artifact's Cases, so
+    # the narrower key would collide two same-named Lines and drop one Case's evidence.
+    evidence = {(row['case_id'], row['source_line_id'], row['endpoint_side']): row
+                for row in inputs.endpoint_evidence}
+    policy_fields = {'policy_version': inputs.policy.policy_version,
+                     'policy_sha256': policy_sha256(inputs.policy)}
+    completion, unresolved, plan = [], [], []
+    for (case_id, raw_value), by_port in sorted(_placement_ports(inputs).items()):
+        ports = [by_port[key] for key in sorted(by_port)]
+        source_case_key = _source_case_key(inputs, case_id, 'placement proposals')
+        # The cited raw reference is the lowest declaring Line row, and its field is
+        # that same record's field: the citation is one record plus one of its columns.
+        cited = min(ports, key=lambda p: (p['source_line_record_ref'], p['endpoint_side']))
+        cited_ref = cited['source_line_record_ref']
+        raw_field = LINE_ENDPOINT_FIELDS[cited['endpoint_side'] - 1]
+        port_refs = sorted({p['proposal_id'] for p in ports}
+                           | {p['anchor_id'] for p in ports})
+        rule_fields = {
+            'case_id': case_id, 'source_case_key': source_case_key,
+            'source_entity_type': 'LINE', 'donor_source_entity_type': None,
+            'source_record_ref': cited_ref, 'donor_source_record_ref': None,
+            'raw_field': raw_field, 'raw_reference_value': raw_value,
+            'rule_id': PLACEMENT_BUS_RULE, 'rule_version': PLACEMENT_BUS_RULE_VERSION,
+            'tier': None, **policy_fields}
+
+        malformed = []
+        voltages = set()
+        for port in ports:
+            row = evidence.get((case_id, port['source_line_id'], port['endpoint_side']))
+            if row is None or row['raw_endpoint_value'] != raw_value:
+                malformed.append(port)
+                continue
+            if row.get('voltage_evidence') is not None:
+                voltages.add(row['voltage_evidence'])
+        if malformed:
+            unresolved.append(record(
+                completion_status='UNRESOLVED', confidence_class='NONE',
+                evidence_refs=sorted(set(port_refs) | {
+                    _endpoint_evidence_locator(p['source_line_id'], p['endpoint_side'])
+                    for p in malformed}),
+                closure_depth=None, reason=EVIDENCE_JOIN_MISMATCH, **rule_fields))
+            continue
+
+        evidence_refs = sorted(set(port_refs) | {
+            _endpoint_evidence_locator(p['source_line_id'], p['endpoint_side'])
+            for p in ports})
+        if len(voltages) == 1:
+            base_kv, voltage_reason = voltages.pop(), None
+        else:
+            base_kv, voltage_reason = None, VOLTAGE_CONFLICT if voltages else VOLTAGE_ABSENT
+        station = station_value(inputs.bus_member_bytes_by_case.get(case_id))
+        station_reason = None if station is not None else STATION_NOT_UNIQUE
+
+        rec = record(
+            completion_status='PROPOSED', confidence_class='ENGINEERING_DEFAULT',
+            evidence_refs=evidence_refs, closure_depth=0, reason=None, **rule_fields)
+        completion.append(rec)
+        plan.append({
+            'case_id': case_id, 'source_case_key': source_case_key,
+            'destination_member': f'{source_case_key}/{PLACEMENT_BUS_FILE}',
+            'values': {'Bus_ID': raw_value, 'Bus_Name': None, 'Bus_BaseKV': base_kv,
+                       'Bus_Phase': None, 'Bus_Station_ID': station, 'Bus_IsSource': None},
+            'source_record_ref': cited_ref, 'raw_field': raw_field,
+            'raw_reference_value': raw_value, 'tier': rec['tier'],
+            'record_ids': (rec['record_id'],)})
+        for reason, refs in (
+                (voltage_reason, evidence_refs),
+                (station_reason, sorted(set(port_refs)
+                                        | {f'{source_case_key}/{PLACEMENT_BUS_FILE}'}))):
+            if reason is None:
+                continue
+            unresolved.append(record(
+                completion_status='UNRESOLVED', confidence_class='NONE',
+                evidence_refs=refs, closure_depth=None, reason=reason, **rule_fields))
+    return tuple(completion), tuple(unresolved), tuple(plan)
+
+
+def placement_bus_records(inputs: CompletionInputs) -> tuple[dict, ...]:
+    """The rule's ``PROPOSED``/``ENGINEERING_DEFAULT`` records, one per materialized row."""
+    return _placement_bus(inputs)[0]
+
+
+def _completion_records(inputs: CompletionInputs, cross: tuple, placement: tuple) -> tuple:
     cross_completion, _, cross_plan = cross
-    return recovery_records(inputs) + cross_completion, cross_plan
+    placement_completion, _, bus_plan = placement
+    return recovery_records(inputs) + cross_completion + placement_completion, cross_plan, bus_plan
 
 
-def _unresolved_records(inputs: CompletionInputs, cross: tuple) -> tuple:
+def _unresolved_records(inputs: CompletionInputs, cross: tuple, placement: tuple) -> tuple:
     cohort, overlap = cohort_records(inputs)
     _, cross_unresolved, _ = cross
-    return cohort + cross_unresolved, overlap
+    _, placement_unresolved, _ = placement
+    return cohort + cross_unresolved + placement_unresolved, overlap
 
 
 def _case_summary(completion, unresolved) -> tuple:
@@ -358,16 +558,22 @@ def _case_summary(completion, unresolved) -> tuple:
 
 def build_ledger(inputs: CompletionInputs) -> Ledger:
     cross = cross_case_records(inputs)
-    completion, append_plan = _completion_records(inputs, cross)
+    placement = _placement_bus(inputs)
+    completion, append_plan, bus_plan = _completion_records(inputs, cross, placement)
     completion = order_records(completion)
-    unresolved, overlap = _unresolved_records(inputs, cross)
+    unresolved, overlap = _unresolved_records(inputs, cross, placement)
     unresolved = order_unresolved(unresolved)
     summary = tuple(sorted(_case_summary(completion, unresolved),
                            key=lambda r: (r['case_id'], canonical_json_bytes(r))))
-    addition_count = sum(1 for r in completion if r['rule_id'] == CROSS_CASE_RULE)
+    # addition_count is the evidence trail: one per PROPOSED record a materializing rule
+    # contributed. appended_row_count is the row arithmetic: what the delivered CSVs
+    # actually gained, across both plans. They differ whenever a row is shared.
+    addition_count = sum(1 for r in completion
+                         if r['rule_id'] in (CROSS_CASE_RULE, PLACEMENT_BUS_RULE))
     return Ledger(
         completion_records=completion, unresolved_records=unresolved, case_summary=summary,
         counts={'completion_records': len(completion), 'unresolved_records': len(unresolved),
-                'addition_count': addition_count, 'appended_row_count': len(append_plan),
+                'addition_count': addition_count,
+                'appended_row_count': len(append_plan) + len(bus_plan),
                 'cohort_overlap_members': overlap},
-        append_plan=append_plan)
+        append_plan=append_plan, bus_plan=bus_plan)

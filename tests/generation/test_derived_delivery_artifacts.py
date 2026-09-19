@@ -109,6 +109,7 @@ def test_provenance_row_index_aligns_with_the_delivered_csv(delivery_fixture):
 
 
 def test_provenance_is_ordered_by_case_file_and_row(delivery_fixture):
+    delivery_fixture.append_donor_row().placement_bus()
     root = delivery_fixture.write()
     rows = [json.loads(line) for line in
             (root / 'provenance' / 'row_provenance.jsonl').read_bytes().splitlines()]
@@ -117,12 +118,22 @@ def test_provenance_is_ordered_by_case_file_and_row(delivery_fixture):
 
 
 def test_source_record_ref_points_at_the_row_it_describes(delivery_fixture):
+    """A SOURCE row, and a copied APPENDED row, each name the source row they mirror.
+
+    A generated placement Bus row is exempt, and is checked by
+    ``test_generated_bus_row_cites_the_line_that_declared_it`` instead: no source Bus
+    row exists for it to mirror, so its ref names the source *Line* row that declared
+    the endpoint, in a different member and at an unrelated row index.
+    """
     from grid_case_generator.io.nanjing_source.locator import SourceRecordRef
     from grid_case_generator.io.source_bytes import member_path_of
+    delivery_fixture.placement_bus()
     root = delivery_fixture.write()
     rows = [json.loads(line) for line in
             (root / 'provenance' / 'row_provenance.jsonl').read_bytes().splitlines()]
-    for row in rows:
+    checked = [r for r in rows if r['rule_id'] != 'PLACEMENT_MISSING_ENDPOINT_BUS_V1']
+    assert len(checked) == len(rows) - len(delivery_fixture.bus_plan)
+    for row in checked:
         ref = SourceRecordRef(row['source_record_ref'])
         assert member_path_of(ref) == f"{row['source_case_key']}/{row['target_file']}"
         assert ref.data_row == row['row_index'] + 1
@@ -295,6 +306,35 @@ def test_appended_provenance_rows_align_with_the_delivered_csv(delivery_fixture)
     assert appended_row == donor_rows[1], 'the appended row must be the donor row verbatim'
 
 
+def test_no_source_member_is_read_or_split_twice(delivery_fixture, monkeypatch):
+    """The split-once invariant: a donor member is not re-split when it is also delivered.
+
+    Counting is keyed on the member path, not on content: several Cases ship
+    byte-identical empty members, so a content-keyed count would over-report two splits
+    where only one member was actually processed twice.
+    """
+    from grid_case_generator.io import derived_delivery_artifacts as dda
+    reads, splits = [], []
+    real_read, real_split = dda.raw_member_bytes, dda.split_raw_records
+
+    def counted_read(archive, member_path):
+        reads.append(member_path)
+        return real_read(archive, member_path)
+
+    def counted_split(member_bytes):
+        splits.append(member_bytes)
+        return real_split(member_bytes)
+
+    monkeypatch.setattr(dda, 'raw_member_bytes', counted_read)
+    monkeypatch.setattr(dda, 'split_raw_records', counted_split)
+    delivery_fixture.append_donor_row()
+    delivery_fixture.write()
+
+    members = [member for _, member in delivery_fixture.members]
+    assert sorted(reads) == sorted(members), 'every member read exactly once'
+    assert len(splits) == len(members), 'one split per read, so at most one per member'
+
+
 def test_passthrough_member_is_the_no_append_entry_point(delivery_fixture):
     from grid_case_generator.io.derived_delivery_artifacts import passthrough_member
     destination = delivery_fixture.tmp_path / 'single.csv'
@@ -306,3 +346,127 @@ def test_passthrough_member_is_the_no_append_entry_point(delivery_fixture):
     with pytest.raises(FileExistsError):
         with ZipFile(delivery_fixture.archive) as archive:
             passthrough_member(archive, member, destination)
+
+
+# --- PLACEMENT_MISSING_ENDPOINT_BUS_V1 materialization ---
+
+
+def test_generated_row_reparses_to_the_intended_values(delivery_fixture):
+    delivery_fixture.placement_bus()
+    delivery_fixture.write()
+    row = delivery_fixture.reparsed_last_bus_row()
+    assert row['Bus_ID'] == delivery_fixture.raw_endpoint_value
+    assert row['Bus_Name'] == '' and row['Bus_Phase'] == '' and row['Bus_IsSource'] == ''
+    assert row['Bus_Station_ID'] == 'S-BING', 'the single Case-local station, verbatim'
+    assert list(row) == list(delivery_fixture.bus_header)
+
+
+def test_bus_header_is_never_rewritten(delivery_fixture):
+    delivery_fixture.placement_bus()
+    root = delivery_fixture.write()
+    target = (root / 'data' / delivery_fixture.bus_member).read_bytes()
+    assert target.startswith(delivery_fixture.bus_member_bytes.split(b'\r\n')[0])
+    assert target.startswith(delivery_fixture.bus_member_bytes), 'the source region is verbatim'
+
+
+def test_line_csv_receives_no_new_row(delivery_fixture):
+    delivery_fixture.placement_bus()
+    root = delivery_fixture.write()
+    after = (root / 'data' / delivery_fixture.referring_key / '08_Line.csv').read_bytes()
+    with ZipFile(delivery_fixture.archive) as archive:
+        assert after == archive.read(f'{delivery_fixture.referring_key}/08_Line.csv')
+
+
+def test_both_plans_onto_one_member_are_ordered_by_rule_id(delivery_fixture):
+    """Both plans target 02_Bus.csv, so this member really does carry both.
+
+    The contract orders a member's appended rows by ``rule_id``, which puts the copied
+    ``CROSS_CASE_REFERENCE_COPY_V1`` row before the generated
+    ``PLACEMENT_MISSING_ENDPOINT_BUS_V1`` row. Appending the plans in the other order
+    would still pass every test that gives each plan its own member.
+    """
+    delivery_fixture.append_donor_row(destination='02_Bus.csv', donor_file='02_Bus.csv')
+    delivery_fixture.placement_bus()
+    root = delivery_fixture.write()
+    rows = [json.loads(line) for line in
+            (root / 'provenance' / 'row_provenance.jsonl').read_bytes().splitlines()]
+    target = root / 'data' / delivery_fixture.bus_member
+    parsed = list(csv.reader(io.StringIO(target.read_bytes().decode('utf-8-sig'), newline='')))
+    appended = [r for r in rows if r['target_file'] == '02_Bus.csv' and r['row_kind'] == 'APPENDED']
+    assert len(appended) == 2
+    assert [r['rule_id'] for r in appended] == [
+        'CROSS_CASE_REFERENCE_COPY_V1', 'PLACEMENT_MISSING_ENDPOINT_BUS_V1']
+    assert [r['row_index'] for r in appended] == [1, 2]
+    assert [r['source_case_key'] for r in appended] == [delivery_fixture.referring_key] * 2
+    bus = appended[-1]
+    assert delivery_fixture.result['placement_rows'] == len(delivery_fixture.bus_plan)
+    assert parsed[-1][0] == delivery_fixture.raw_endpoint_value
+    assert parsed[1 + bus['row_index']] == parsed[-1], 'row_index names the delivered row'
+
+
+def test_generated_bus_row_cites_the_line_that_declared_it(delivery_fixture):
+    from grid_case_generator.io.nanjing_source.locator import SourceRecordRef
+    from grid_case_generator.io.source_bytes import member_path_of
+    delivery_fixture.placement_bus()
+    root = delivery_fixture.write()
+    rows = [json.loads(line) for line in
+            (root / 'provenance' / 'row_provenance.jsonl').read_bytes().splitlines()]
+    record, = [r for r in rows if r['rule_id'] == 'PLACEMENT_MISSING_ENDPOINT_BUS_V1']
+    ref = SourceRecordRef(record['source_record_ref'])
+    assert record['source_case_key'] == delivery_fixture.referring_key
+    assert member_path_of(ref) == f'{delivery_fixture.referring_key}/08_Line.csv'
+    assert record['raw_field'] in ('Line_FromBus', 'Line_ToBus')
+    assert record['raw_reference_value'] == delivery_fixture.raw_endpoint_value
+
+
+def test_generated_bus_row_provenance_is_engineering_default(delivery_fixture):
+    delivery_fixture.placement_bus()
+    root = delivery_fixture.write()
+    rows = [json.loads(line) for line in
+            (root / 'provenance' / 'row_provenance.jsonl').read_bytes().splitlines()]
+    record, = [r for r in rows if r['rule_id'] == 'PLACEMENT_MISSING_ENDPOINT_BUS_V1']
+    assert record['rule_version'] == '1.1.0'
+    assert record['completion_status'] == 'PROPOSED'
+    assert record['confidence_class'] == 'ENGINEERING_DEFAULT'
+    assert record['tier'] is None
+    assert record['donor_source_record_ref'] is None
+    assert record['evidence_refs'] == list(delivery_fixture.bus_plan[0]['record_ids'])
+
+
+def test_no_placement_rows_are_written_without_a_bus_plan(delivery_fixture):
+    root = delivery_fixture.write()
+    rows = [json.loads(line) for line in
+            (root / 'provenance' / 'row_provenance.jsonl').read_bytes().splitlines()]
+    assert delivery_fixture.result['placement_rows'] == 0
+    assert not [r for r in rows if r['rule_id'] == 'PLACEMENT_MISSING_ENDPOINT_BUS_V1']
+
+
+
+
+def test_a_cross_station_row_reports_its_own_tier(delivery_fixture):
+    """The writer must not assert a tier the plan did not carry.
+
+    ``materialize_tiers`` is a policy lever, so the same rule can emit both tiers. A
+    literal ``SAME_STATION`` in the writer would then misreport a delivered row.
+    """
+    delivery_fixture.append_donor_row(tier='CROSS_STATION')
+    root = delivery_fixture.write()
+    rows = [json.loads(line) for line in
+            (root / 'provenance' / 'row_provenance.jsonl').read_bytes().splitlines()]
+    record, = [r for r in rows if r['row_kind'] == 'APPENDED']
+    assert record['tier'] == 'CROSS_STATION'
+
+
+def test_a_plan_entry_for_an_undelivered_member_writes_nothing(delivery_fixture):
+    """The check must run before the first write, because the target is write-once.
+
+    A late failure would leave a partial tree that no retry can replace and that is
+    indistinguishable from a complete delivery.
+    """
+    delivery_fixture.placement_bus()
+    plan = [dict(entry, destination_member='数据/无此变_10kV无此线000/02_Bus.csv')
+            for entry in delivery_fixture.bus_plan]
+    target = delivery_fixture.tmp_path / 'delivery'
+    with pytest.raises(ValueError, match='outside the delivered inventory'):
+        delivery_fixture.write(bus_plan=tuple(plan))
+    assert not target.exists()
