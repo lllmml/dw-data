@@ -208,3 +208,101 @@ def test_output_under_data_raw_is_rejected(delivery_fixture):
     target = delivery_fixture.tmp_path / 'data' / 'raw' / 'delivery'
     with pytest.raises(ValueError, match='data/raw'):
         write_delivery(target, **delivery_fixture.write_args())
+
+
+# --- CROSS_CASE_REFERENCE_COPY_V1 append path ---
+
+
+def test_crlf_source_appends_with_one_separator_and_stays_verbatim(delivery_fixture):
+    delivery_fixture.append_donor_row()
+    root = delivery_fixture.write()
+    target = root / 'data' / delivery_fixture.referring_key / '03_Switch.csv'
+    delivered = target.read_bytes()
+    with ZipFile(delivery_fixture.archive) as archive:
+        source = archive.read(f'{delivery_fixture.referring_key}/03_Switch.csv')
+        donor = archive.read(delivery_fixture.donor_member('03_Switch.csv')).split(b'\r\n')
+    assert delivered.startswith(source), 'the source prefix must be byte-identical'
+    appended = delivered[len(source):]
+    assert appended == donor[1] + b'\r\n'
+    assert b'\r\n\r\n' not in appended, 'exactly one separator, not two'
+
+
+def test_lf_only_source_keeps_its_own_terminators_in_the_source_region(delivery_fixture):
+    delivery_fixture.append_donor_row(destination='04_Disconnector.csv',
+                                      donor_file='03_Switch.csv')
+    root = delivery_fixture.write()
+    delivered = (root / 'data' / delivery_fixture.referring_key / '04_Disconnector.csv').read_bytes()
+    with ZipFile(delivery_fixture.archive) as archive:
+        source = archive.read(f'{delivery_fixture.referring_key}/04_Disconnector.csv')
+    assert delivered.startswith(source)
+    assert source.count(b'\r\n') == 0, 'the fixture edge member is LF-only'
+    # The appended block is CRLF by contract; the source region is untouched.
+    assert delivered[len(source):].endswith(b'\r\n')
+    assert delivered[len(source):].count(b'\r\n') == 1
+
+
+def test_missing_trailing_terminator_gets_exactly_one_separator(delivery_fixture):
+    delivery_fixture.append_donor_row(destination='06_EarthingSwitch.csv',
+                                      donor_file='03_Switch.csv')
+    root = delivery_fixture.write()
+    delivered = (root / 'data' / delivery_fixture.referring_key / '06_EarthingSwitch.csv').read_bytes()
+    with ZipFile(delivery_fixture.archive) as archive:
+        source = archive.read(f'{delivery_fixture.referring_key}/06_EarthingSwitch.csv')
+        donor = archive.read(delivery_fixture.donor_member('03_Switch.csv')).split(b'\r\n')
+    assert not source.endswith(b'\r\n'), 'this edge member has no trailing terminator'
+    assert delivered == source + b'\r\n' + donor[1] + b'\r\n'
+    # Two logical records, not one: the last source row did not absorb the donor row.
+    rows = list(csv.reader(io.StringIO(delivered.decode('utf-8-sig'), newline='')))
+    assert rows[-1][0] == donor[1].split(b',')[0].decode()
+
+
+def test_unappended_member_source_prefix_is_byte_identical(delivery_fixture):
+    delivery_fixture.append_donor_row(destination='03_Switch.csv', donor_file='03_Switch.csv')
+    root = delivery_fixture.write()
+    with ZipFile(delivery_fixture.archive) as archive:
+        for _, member_path in delivery_fixture.members:
+            delivered = (root / 'data' / member_path).read_bytes()
+            source = archive.read(member_path)
+            if member_path.endswith(f'{delivery_fixture.referring_key}/03_Switch.csv'):
+                assert delivered.startswith(source)
+                assert delivered != source
+            else:
+                assert delivered == source, member_path
+
+
+def test_appended_provenance_rows_align_with_the_delivered_csv(delivery_fixture):
+    delivery_fixture.append_donor_row()
+    root = delivery_fixture.write()
+    rows = [json.loads(line) for line in
+            (root / 'provenance' / 'row_provenance.jsonl').read_bytes().splitlines()]
+    appended = [r for r in rows if r['row_kind'] == 'APPENDED']
+    assert len(appended) == delivery_fixture.result['appended_rows'] == 1
+    record, = appended
+    assert record['rule_id'] == 'CROSS_CASE_REFERENCE_COPY_V1'
+    assert record['rule_version'] == '1.1.0'
+    assert record['completion_status'] == 'PROPOSED'
+    assert record['tier'] == 'SAME_STATION'
+    assert record['donor_source_record_ref'] is not None
+    assert record['evidence_refs']
+    target = root / 'data' / record['source_case_key'] / record['target_file']
+    parsed = list(csv.reader(io.StringIO(target.read_bytes().decode('utf-8-sig'), newline='')))
+    assert 1 + record['row_index'] == len(parsed) - 1, 'row_index must name the last row'
+    appended_row = parsed[record['row_index'] + 1]
+    with ZipFile(delivery_fixture.archive) as archive:
+        donor_rows = list(csv.reader(io.StringIO(
+            archive.read(delivery_fixture.donor_member('03_Switch.csv')).decode('utf-8-sig'),
+            newline='')))
+    assert appended_row == donor_rows[1], 'the appended row must be the donor row verbatim'
+
+
+def test_passthrough_member_is_the_no_append_entry_point(delivery_fixture):
+    from grid_case_generator.io.derived_delivery_artifacts import passthrough_member
+    destination = delivery_fixture.tmp_path / 'single.csv'
+    with ZipFile(delivery_fixture.archive) as archive:
+        member = f'{delivery_fixture.referring_key}/01_Station.csv'
+        written = passthrough_member(archive, member, destination)
+        assert written == archive.read(member)
+    assert destination.read_bytes() == written
+    with pytest.raises(FileExistsError):
+        with ZipFile(delivery_fixture.archive) as archive:
+            passthrough_member(archive, member, destination)

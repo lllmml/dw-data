@@ -3,10 +3,12 @@
 Implemented rule families: ``ACCEPTED_DETERMINISTIC_RECOVERY_V1`` emits one
 ``CONFIRMED`` record per accepted addition and appends no CSV row;
 ``COHORT_TAXONOMY_V1`` is classification-only, emitting ``UNRESOLVED`` records
-that never materialize a row. The two materializing rules
-``CROSS_CASE_REFERENCE_COPY_V1`` and ``PLACEMENT_MISSING_ENDPOINT_BUS_V1``
-arrive in later slices. The module performs no IO: ``build_ledger`` receives
-already-loaded rows and returns the assembled ledger.
+that never materialize a row; ``CROSS_CASE_REFERENCE_COPY_V1`` copies a donor
+Case's source row into the referring Case under its nine preconditions, emitting
+``PROPOSED``/``UNIQUE_EVIDENCE`` records plus a de-duplicated append plan.
+``PLACEMENT_MISSING_ENDPOINT_BUS_V1`` arrives in a later slice. The module
+performs no IO: ``build_ledger`` receives already-loaded rows and returns the
+assembled ledger.
 
 Forward constraint for Slices 4-7: ``record_id`` hashes ``evidence_refs`` in
 list order, so any rule assembling ``evidence_refs`` from a set or dict must
@@ -16,8 +18,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from grid_case_generator.io.canonical_json import canonical_json_bytes
+from grid_case_generator.io.source_bytes import member_path_of
 from grid_case_generator.models.completion_export import (
-    RECOVERY_RULE, CompletionPolicy, ledger_id, policy_sha256)
+    CROSS_CASE_RULE, CROSS_CASE_RULE_VERSION, RECOVERY_RULE, CompletionPolicy,
+    ledger_id, policy_sha256)
 
 RECORD_KEYS = ('record_id', 'completion_status', 'confidence_class', 'tier', 'rule_id',
     'rule_version', 'case_id', 'source_case_key', 'source_entity_type',
@@ -25,8 +29,8 @@ RECORD_KEYS = ('record_id', 'completion_status', 'confidence_class', 'tier', 'ru
     'raw_field', 'raw_reference_value', 'evidence_refs', 'closure_depth',
     'policy_version', 'policy_sha256', 'reason')
 
-COUNTS_KEYS = ('completion_records', 'unresolved_records', 'materialized_rows',
-               'cohort_overlap_members')
+COUNTS_KEYS = ('completion_records', 'unresolved_records', 'addition_count',
+               'appended_row_count', 'cohort_overlap_members')
 
 RECOVERY_RULE_VERSION = '1.0.0'
 COHORT_RULE = 'COHORT_TAXONOMY_V1'
@@ -47,6 +51,7 @@ class CompletionInputs:
     placement_feeders: tuple[dict, ...]
     backbone_taxonomy: tuple[dict, ...]
     audit_classification: tuple[dict, ...]
+    audit_cases: tuple[dict, ...]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -55,6 +60,7 @@ class Ledger:
     unresolved_records: tuple[dict, ...]
     case_summary: tuple[dict, ...]
     counts: dict
+    append_plan: tuple[dict, ...]
 
 
 def record(**fields) -> dict:
@@ -222,12 +228,128 @@ def cohort_records(inputs: CompletionInputs) -> tuple[tuple[dict, ...], int]:
     return tuple(records), overlap_members
 
 
-def _completion_records(inputs: CompletionInputs) -> tuple:
-    return recovery_records(inputs)
+def eligible(row, tiers, cases):
+    if row['classification'] != 'UNIQUE_EXTERNAL_MATCH':
+        return False, row['classification']
+    if row['external_candidate_count'] != 1:
+        return False, 'MULTIPLE_EXTERNAL_MATCH'
+    candidate = (row.get('candidates') or [None])[0]
+    if candidate is None:
+        return False, 'NO_CANONICAL_CANDIDATE'
+    if candidate['identity_status'] != 'UNIQUE':
+        return False, 'AMBIGUOUS_IDENTITY'
+    if not candidate.get('type_compatible'):
+        return False, 'TYPE_INCOMPATIBLE'
+    if not candidate.get('canonical_ref'):
+        return False, 'NO_CANONICAL_CANDIDATE'
+    if candidate.get('voltage_relationship') != 'COMPATIBLE':
+        return False, 'VOLTAGE_NOT_COMPATIBLE'
+    if row.get('local_candidate_count'):
+        return False, 'ALSO_RESOLVES_CASE_LOCALLY'
+    if cases.get(row['case_id'], {}).get('hard_blockers'):
+        return False, 'REFERRING_CASE_HARD_BLOCKER'
+    if cases.get(candidate['case_id'], {}).get('hard_blockers'):
+        return False, 'DONOR_CASE_HARD_BLOCKER'
+    if candidate['station_relationship'] not in tiers:
+        return False, 'TIER_NOT_MATERIALIZED'
+    return True, ''
 
 
-def _unresolved_records(inputs: CompletionInputs) -> tuple:
-    return cohort_records(inputs)
+def _cross_case_source_case_key(inputs, case_id):
+    key = inputs.source_case_key_by_case.get(case_id)
+    if key is None:
+        raise ValueError(f'v1 ledger unknown case {case_id!r} in cross-case references')
+    return key
+
+
+def cross_case_records(inputs: CompletionInputs):
+    """Emit ``CROSS_CASE_REFERENCE_COPY_V1`` records and the append plan.
+
+    Returns ``(completion_records, unresolved_records, append_plan)``. Gated by
+    ``CROSS_CASE_RULE`` in ``policy.enabled_rules``. One ``PROPOSED``/
+    ``UNIQUE_EVIDENCE`` record is emitted per audit reference that passes every
+    precondition; each failing reference becomes an ``UNRESOLVED``/``NONE`` record
+    under ``COHORT_RULE`` carrying the first failing reason. The append plan is
+    de-duplicated on ``(destination_member, donor_source_record_ref)`` so a donor row
+    shared by several references is written once, while every contributor's
+    ``record_id`` is retained in that plan entry's ``record_ids``.
+    """
+    if CROSS_CASE_RULE not in inputs.policy.enabled_rules:
+        return (), (), ()
+    tiers = inputs.policy.materialize_tiers
+    cases = {row['case_id']: row for row in inputs.audit_cases}
+    policy_fields = {'policy_version': inputs.policy.policy_version,
+                     'policy_sha256': policy_sha256(inputs.policy)}
+    completion = []
+    unresolved = []
+    plan = {}
+    for row in inputs.audit_rows:
+        ok, reason = eligible(row, tiers, cases)
+        candidate = (row.get('candidates') or [None])[0]
+        source_case_key = _cross_case_source_case_key(inputs, row['case_id'])
+        if not ok:
+            tier = (candidate['station_relationship']
+                    if reason == 'TIER_NOT_MATERIALIZED' else None)
+            evidence_refs = [row['reference_id']]
+            if candidate is not None:
+                evidence_refs.append(candidate['index_id'])
+            unresolved.append(record(
+                completion_status='UNRESOLVED', confidence_class='NONE',
+                tier=tier, rule_id=COHORT_RULE, rule_version=COHORT_RULE_VERSION,
+                case_id=row['case_id'], source_case_key=source_case_key,
+                source_entity_type=row['source_entity_type'],
+                donor_source_entity_type=None, source_record_ref=row['source_record_ref'],
+                donor_source_record_ref=None, raw_field=None, raw_reference_value=None,
+                evidence_refs=sorted(evidence_refs), closure_depth=None,
+                reason=reason, **policy_fields))
+            continue
+        rec = record(
+            completion_status='PROPOSED', confidence_class='UNIQUE_EVIDENCE',
+            tier=candidate['station_relationship'],
+            rule_id=CROSS_CASE_RULE, rule_version=CROSS_CASE_RULE_VERSION,
+            case_id=row['case_id'], source_case_key=source_case_key,
+            source_entity_type=row['source_entity_type'],
+            donor_source_entity_type=candidate['source_entity_type'],
+            source_record_ref=row['source_record_ref'],
+            donor_source_record_ref=candidate['source_record_ref'],
+            raw_field=row['raw_field'], raw_reference_value=row['raw_reference_value'],
+            evidence_refs=sorted([row['reference_id'], candidate['index_id']]),
+            closure_depth=0, reason=None, **policy_fields)
+        completion.append(rec)
+        donor_filename = member_path_of(candidate['source_record_ref']).rpartition('/')[2]
+        destination_member = f'{source_case_key}/{donor_filename}'
+        donor_ref = candidate['source_record_ref']
+        key = (destination_member, donor_ref)
+        entry = plan.get(key)
+        if entry is None:
+            plan[key] = {'destination_member': destination_member,
+                         'donor_source_record_ref': donor_ref,
+                         'source_record_ref': row['source_record_ref'],
+                         'record_ids': [rec['record_id']]}
+        else:
+            entry['source_record_ref'] = min(entry['source_record_ref'],
+                                             row['source_record_ref'])
+            entry['record_ids'].append(rec['record_id'])
+    append_plan = tuple(
+        {'destination_member': entry['destination_member'],
+         'donor_source_record_ref': entry['donor_source_record_ref'],
+         'source_record_ref': entry['source_record_ref'],
+         'record_ids': tuple(sorted(entry['record_ids']))}
+        for entry in sorted(plan.values(),
+                            key=lambda e: (e['destination_member'],
+                                           e['donor_source_record_ref'])))
+    return tuple(completion), tuple(unresolved), append_plan
+
+
+def _completion_records(inputs: CompletionInputs, cross: tuple) -> tuple:
+    cross_completion, _, cross_plan = cross
+    return recovery_records(inputs) + cross_completion, cross_plan
+
+
+def _unresolved_records(inputs: CompletionInputs, cross: tuple) -> tuple:
+    cohort, overlap = cohort_records(inputs)
+    _, cross_unresolved, _ = cross
+    return cohort + cross_unresolved, overlap
 
 
 def _case_summary(completion, unresolved) -> tuple:
@@ -235,12 +357,17 @@ def _case_summary(completion, unresolved) -> tuple:
 
 
 def build_ledger(inputs: CompletionInputs) -> Ledger:
-    completion = order_records(_completion_records(inputs))
-    unresolved, overlap = _unresolved_records(inputs)
+    cross = cross_case_records(inputs)
+    completion, append_plan = _completion_records(inputs, cross)
+    completion = order_records(completion)
+    unresolved, overlap = _unresolved_records(inputs, cross)
     unresolved = order_unresolved(unresolved)
     summary = tuple(sorted(_case_summary(completion, unresolved),
                            key=lambda r: (r['case_id'], canonical_json_bytes(r))))
+    addition_count = sum(1 for r in completion if r['rule_id'] == CROSS_CASE_RULE)
     return Ledger(
         completion_records=completion, unresolved_records=unresolved, case_summary=summary,
         counts={'completion_records': len(completion), 'unresolved_records': len(unresolved),
-                'materialized_rows': 0, 'cohort_overlap_members': overlap})
+                'addition_count': addition_count, 'appended_row_count': len(append_plan),
+                'cohort_overlap_members': overlap},
+        append_plan=append_plan)

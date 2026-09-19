@@ -840,6 +840,26 @@ The `endswith` check is load-bearing, not defensive. The intake's members all en
 
 The appended rows are the donor's own row bytes, including the donor's original quoting, taken from `cache.records(member_path_of(candidate['source_record_ref']))[candidate_ref.data_row]`.
 
+## Two counts, not one: `addition_count` vs `appended_row_count`
+
+These are different numbers and the plan must never conflate them. Measured for the v1 policy cohort:
+
+| Measure | Value |
+|---|---:|
+| `addition_count` — audit references that pass all nine preconditions | 2,544 |
+| distinct `(destination member, donor member, donor row)` triples | **1,476** |
+| triples reached by more than one addition | 199, covering 1,267 additions |
+| distinct destination members that receive rows | 887 |
+
+**1,267 of the 2,544 additions target a triple that another addition already covers.** Appending one row per addition would write the same donor row into the same destination file twice, producing a CSV in which one device appears as two rows — the silent duplication this project forbids everywhere else. So the append set is **de-duplicated on `(destination member, donor member, donor row)`**, and `appended_row_count` is 1,476. The collapse is order-independent: the two key fields are equal by construction for every contributor, the one varying field `source_record_ref` is folded to the minimum, and `record_ids` is kept sorted, so reversing the input order changes nothing.
+
+The two counts therefore mean different things and both are reported:
+
+- `counts['addition_count']` — materialized rule matches. Equals the number of `PROPOSED` completion records in the ledger, one per audit reference. This is the evidence trail: every reference that the rule acted on is still individually accounted for.
+- `counts['appended_row_count']` — rows actually written into delivered CSVs. Always `<= addition_count`; strictly less whenever several references share a donor row. This is what makes the delivery's row arithmetic check out against its own CSVs.
+
+Because a delivered row can be justified by more than one addition, that row's `evidence_refs` carries **every** contributing ledger `record_id`, sorted, so collapsing 2,544 additions into 1,476 rows loses no evidence. A row backed by three references lists three ids.
+
 ## Provenance for appended rows
 
 `row_kind` stays `SOURCE | APPENDED` — no new kind is introduced. The recovery reason is carried by the record's other fields, which is what they are for: `rule_id = 'CROSS_CASE_REFERENCE_COPY_V1'`, `rule_version = '1.1.0'`, `completion_status = 'PROPOSED'`, `confidence_class = 'UNIQUE_EVIDENCE'`, `tier = 'SAME_STATION'`, and `evidence_refs` citing the audit row's `reference_id` and the donor's `index_id`. An `APPENDED` record is distinguishable from a `SOURCE` one by `row_kind` alone, which is all the contract requires.
@@ -916,7 +936,8 @@ def test_candidate_input_order_changes_nothing(ledger_fixture):
 
 def test_closure_depth_is_obeyed_and_the_overflow_is_counted(ledger_fixture):
     ledger = ledger_fixture.build_cross_case_chain(depth=4, policy_depth=2)
-    assert ledger.counts['materialized_rows'] == 3
+    assert ledger.counts['addition_count'] == 3
+    assert ledger.counts['appended_row_count'] == 3
     over = [r for r in ledger.unresolved_records if r['reason'] == 'CLOSURE_DEPTH_EXCEEDED']
     assert len(over) == 1
     assert over[0]['closure_depth'] == 3
@@ -924,7 +945,8 @@ def test_closure_depth_is_obeyed_and_the_overflow_is_counted(ledger_fixture):
 
 def test_closure_cycle_terminates(ledger_fixture):
     ledger = ledger_fixture.build_cross_case_cycle()
-    assert ledger.counts['materialized_rows'] == 2
+    assert ledger.counts['addition_count'] == 2
+    assert ledger.counts['appended_row_count'] == 2
     assert not [r for r in ledger.unresolved_records if r['reason'] == 'CLOSURE_DEPTH_EXCEEDED']
 ```
 
@@ -933,7 +955,7 @@ def test_closure_cycle_terminates(ledger_fixture):
 - [ ] **Step 4: Run** — expect PASS.
 - [ ] **Step 5: Commit** `feat: materialize same-station cross-case reference completions`.
 
-**Acceptance criteria.** The truth table covers all nine preconditions and records exactly one reason per row; the gate-by-gate counts reproduce 7,818 → 4,410 → 2,954 → 2,544 on the real audit stream; `CROSS_STATION` yields one `TIER_NOT_MATERIALIZED` record and no appended row; appended bytes equal donor row bytes; a member whose source region does not end with a terminator gains exactly one separator and does not concatenate two records; no source region byte is altered; each source member is split at most once per run; the closure is depth-bounded, cycle-safe and every overflow is counted; candidate order changes nothing; `counts['materialized_rows']` equals the number of appended rows and is no longer a hardcoded zero.
+**Acceptance criteria.** The truth table covers all nine preconditions and records exactly one reason per row; the gate-by-gate counts reproduce 7,818 → 4,410 → 2,954 → 2,544 on the real audit stream; `CROSS_STATION` yields one `TIER_NOT_MATERIALIZED` record and no appended row; appended bytes equal donor row bytes; a member whose source region does not end with a terminator gains exactly one separator and does not concatenate two records; no source region byte is altered; each source member is split at most once per run; the closure is depth-bounded, cycle-safe and every overflow is counted; candidate order changes nothing; `counts['addition_count']` counts the rule's `PROPOSED` records and `counts['appended_row_count']` counts plan entries, the two differing whenever references share a donor row (contract revision 004), with neither a hardcoded zero.
 
 ---
 
@@ -1587,7 +1609,7 @@ def test_policy_change_regenerates_without_touching_anything_else(tmp_path, e2e_
     a = e2e_fixture.run_all(tmp_path / 'a', strict)
     b = e2e_fixture.run_all(tmp_path / 'b', loose)
     assert a['policy_sha256'] != b['policy_sha256']
-    assert a['materialized_rows'] < b['materialized_rows']
+    assert a['appended_row_count'] < b['appended_row_count']
     assert a['ledger_records'][0]['source_record_ref'] == \
         b['ledger_records'][0]['source_record_ref']
 

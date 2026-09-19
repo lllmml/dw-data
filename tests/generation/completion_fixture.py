@@ -11,6 +11,7 @@ import io
 from pathlib import Path
 from zipfile import ZipFile
 
+from grid_case_generator.io.nanjing_source.locator import source_record_ref
 from grid_case_generator.io.nanjing_source.schema import NANJING_SOURCE_SCHEMA as SCHEMA
 from grid_case_generator.models.completion_export import CompletionPolicy
 from grid_case_generator.models.identifiers import SourceImportIdFactory as IDs
@@ -76,6 +77,22 @@ _EDGE_ROWS = {
     ],
 }
 
+# A fourth Case acting as the cross-case donor: its 03_Switch.csv row 1 is copied
+# verbatim into the referring Case's own 03_Switch.csv. The donor also carries a
+# populated 02_Bus.csv so it looks like a real donor, though the append path only
+# reads the Switch member.
+_DONOR_ROWS = {
+    'SWITCH': [
+        {'Switch_ID': 'SW-DING-1', 'Switch_FromBus': 'B-DING-1', 'Switch_ToBus': 'B-DING-2',
+         'Switch_Phase': 'ABC', 'Switch_NormalState': 'closed', 'Switch_IsTie': 'false',
+         'Switch_RatedCurrent_A': '630'},
+    ],
+    'BUS': [
+        {'Bus_ID': 'B-DING-1', 'Bus_Name': '丁母线一', 'Bus_BaseKV': '10.5', 'Bus_Phase': 'ABC',
+         'Bus_Station_ID': 'S-DING', 'Bus_IsSource': 'true'},
+    ],
+}
+
 
 def _ordinary_bytes(schema, rows):
     """Ordinary member: BOM + header and rows via csv.writer (CRLF, trailing terminator)."""
@@ -118,7 +135,8 @@ def _quoted_bytes(schema, rows):
 
 class DeliveryFixture:
     def __init__(self, tmp_path, archive, roots, members, cases, source_row_count,
-                 feederless_key, lf_member, no_trailing_member, quoted_member, policy):
+                 feederless_key, referring_key, donor_key, lf_member, no_trailing_member,
+                 quoted_member, policy):
         self.tmp_path = tmp_path
         self.archive = archive
         self.roots = roots
@@ -126,10 +144,28 @@ class DeliveryFixture:
         self.cases = cases
         self.source_row_count = source_row_count
         self.feederless_key = feederless_key
+        self.referring_key = referring_key
+        self.donor_key = donor_key
         self.lf_member = lf_member
         self.no_trailing_member = no_trailing_member
         self.quoted_member = quoted_member
         self.policy = policy
+        self.append_plan = ()
+
+    def donor_member(self, filename):
+        return f'{self.donor_key}/{filename}'
+
+    def append_donor_row(self, destination='03_Switch.csv', donor_file='03_Switch.csv'):
+        donor_ref = source_record_ref(self.donor_member(donor_file), data_row=1)
+        referring_ref = source_record_ref(f'{self.referring_key}/{destination}', data_row=1)
+        self.append_plan = (
+            {
+                'destination_member': f'{self.referring_key}/{destination}',
+                'donor_source_record_ref': str(donor_ref),
+                'source_record_ref': str(referring_ref),
+                'record_ids': ('v1-completion:ledger:testrecord',),
+            },
+        )
 
     def write_args(self):
         return {
@@ -137,6 +173,7 @@ class DeliveryFixture:
             'archive_path': self.archive,
             'policy': self.policy,
             'roots': self.roots,
+            'append_plan': self.append_plan,
         }
 
     def write(self, **overrides):
@@ -164,6 +201,10 @@ def build(tmp_path):
     )
 
     cases_spec = (
+        {
+            'source_case_key': '数据/丁变_10kV丁线404',
+            'rows': _DONOR_ROWS,
+        },
         {
             'source_case_key': '数据/丙变_10kV丙线303',
             'rows': _EDGE_ROWS,
@@ -221,6 +262,8 @@ def build(tmp_path):
         cases=tuple(cases),
         source_row_count=source_row_count,
         feederless_key='数据/乙变_10kV乙线202',
+        referring_key='数据/丙变_10kV丙线303',
+        donor_key='数据/丁变_10kV丁线404',
         lf_member=special['lf'],
         no_trailing_member=special['no_trailing'],
         quoted_member=special['quoted'],

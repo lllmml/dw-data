@@ -191,7 +191,7 @@ def test_build_ledger_scaffold_is_empty_and_zeroed():
         policy=parse_policy('configs/nanjing_completion_policy_v1.json'),
         source_case_key_by_case={}, audit_rows=(), accepted_additions=(),
         placement_proposals=(), endpoint_evidence=(), placement_feeders=(),
-        backbone_taxonomy=(), audit_classification=())
+        backbone_taxonomy=(), audit_classification=(), audit_cases=())
     ledger = build_ledger(inputs)
     assert isinstance(ledger, Ledger)
     assert ledger.completion_records == ()
@@ -207,7 +207,7 @@ def test_inputs_and_ledger_are_immutable():
         policy=parse_policy('configs/nanjing_completion_policy_v1.json'),
         source_case_key_by_case={}, audit_rows=(), accepted_additions=(),
         placement_proposals=(), endpoint_evidence=(), placement_feeders=(),
-        backbone_taxonomy=(), audit_classification=())
+        backbone_taxonomy=(), audit_classification=(), audit_cases=())
     with pytest.raises(FrozenInstanceError):
         inputs.audit_rows = ()
     ledger = build_ledger(inputs)
@@ -233,7 +233,8 @@ def test_no_io_or_randomness_in_the_module():
     assert 'hash(' not in source
 
 
-def cohort_inputs(*, placement=(), backbone=(), additions=(), case_keys=None, policy=None):
+def cohort_inputs(*, placement=(), backbone=(), additions=(), case_keys=None, policy=None,
+                  audit=(), audit_cases=()):
     from grid_case_generator.generation.completion_ledger import CompletionInputs
     from grid_case_generator.models.completion_export import (
         INFERENCE_RULES, CompletionPolicy)
@@ -243,10 +244,10 @@ def cohort_inputs(*, placement=(), backbone=(), additions=(), case_keys=None, po
         placement_endpoint_bus=True)
     return CompletionInputs(
         policy=policy, source_case_key_by_case=dict(case_keys or {}),
-        audit_rows=(), accepted_additions=tuple(additions),
+        audit_rows=tuple(audit), accepted_additions=tuple(additions),
         placement_proposals=(), endpoint_evidence=(),
         placement_feeders=tuple(placement), backbone_taxonomy=tuple(backbone),
-        audit_classification=())
+        audit_classification=(), audit_cases=tuple(audit_cases))
 
 
 def placement_row(case, feeder, status):
@@ -266,6 +267,48 @@ def addition(case, edge, rule='LEAF_SWITCH_REPRESENTATION_V2', refs=('zip-member
             'supporting_source_refs': list(refs)}
 
 
+def _candidate(donor='case:D', **overrides):
+    candidate = {
+        'case_id': donor,
+        'identity_status': 'UNIQUE',
+        'type_compatible': True,
+        'canonical_ref': 'canonical:switch:1',
+        'voltage_relationship': 'COMPATIBLE',
+        'station_relationship': 'SAME_STATION',
+        'source_entity_type': 'SWITCH',
+        'source_record_ref': 'zip-member:data/donor/03_Switch.csv#data-row=1',
+        'index_id': 'audit:index:1',
+    }
+    candidate.update(overrides)
+    return candidate
+
+
+def cross_case_row(case='case:A', donor='case:D', *, candidate=None, **overrides):
+    row = {
+        'classification': 'UNIQUE_EXTERNAL_MATCH',
+        'external_candidate_count': 1,
+        'candidates': [candidate if candidate is not None else _candidate(donor)],
+        'local_candidate_count': 0,
+        'case_id': case,
+        'reference_id': 'audit:ref:1',
+        'source_entity_type': 'SWITCH',
+        'source_record_ref': 'zip-member:data/ref/03_Switch.csv#data-row=1',
+        'raw_field': 'Switch_ToBus',
+        'raw_reference_value': 'B-DONOR-2',
+    }
+    row.update(overrides)
+    return row
+
+
+def case_inventory(case='case:A', hard_blockers=()):
+    return {'case_id': case, 'hard_blockers': list(hard_blockers)}
+
+
+def _cross_case_ledger(*, audit, audit_cases, case_keys):
+    return build_ledger(cohort_inputs(audit=audit, audit_cases=audit_cases,
+                                      case_keys=case_keys))
+
+
 def test_recovery_records_are_confirmed_and_append_nothing():
     ledger = build_ledger(cohort_inputs(additions=[addition('case:A', 'e1')],
                                         case_keys={'case:A': '数据/甲'}))
@@ -275,7 +318,8 @@ def test_recovery_records_are_confirmed_and_append_nothing():
     assert {r['confidence_class'] for r in ledger.completion_records} == {'EXACT_STRUCTURAL'}
     assert all(r['donor_source_record_ref'] is None for r in ledger.completion_records)
     assert all(r['raw_reference_value'] is None for r in ledger.completion_records)
-    assert ledger.counts['materialized_rows'] == 0
+    assert ledger.counts['addition_count'] == 0
+    assert ledger.counts['appended_row_count'] == 0
 
 
 def test_recovery_records_cite_the_persisted_edge_and_rule():
@@ -411,3 +455,146 @@ def test_cohort_overlap_counts_one_feeder_under_three_reasons():
     # and the placement row emits NON_UNIQUE_PLACEMENT: three records, one feeder.
     assert len(ledger.unresolved_records) == 3
     assert ledger.counts['cohort_overlap_members'] == 1
+
+
+# --- CROSS_CASE_REFERENCE_COPY_V1 ---
+
+_CROSS_CASE_KEYS = {'case:A': 'dir/a', 'case:B': 'dir/b', 'case:D': 'dir/d', 'case:E': 'dir/e'}
+_CROSS_CASE_CASES = [case_inventory('case:A'), case_inventory('case:B'),
+                     case_inventory('case:D'), case_inventory('case:E')]
+
+
+@pytest.mark.parametrize('row_kwargs,candidate_kwargs,reason', [
+    ({'classification': 'LOCAL_UNRESOLVED_ONLY'}, {}, 'LOCAL_UNRESOLVED_ONLY'),
+    ({'external_candidate_count': 2}, {}, 'MULTIPLE_EXTERNAL_MATCH'),
+    ({'candidates': []}, {}, 'NO_CANONICAL_CANDIDATE'),
+    ({}, {'identity_status': 'DUPLICATE_CONFLICT'}, 'AMBIGUOUS_IDENTITY'),
+    ({}, {'type_compatible': False}, 'TYPE_INCOMPATIBLE'),
+    ({}, {'canonical_ref': ''}, 'NO_CANONICAL_CANDIDATE'),
+    ({}, {'voltage_relationship': 'CONFLICT'}, 'VOLTAGE_NOT_COMPATIBLE'),
+    ({'local_candidate_count': 1}, {}, 'ALSO_RESOLVES_CASE_LOCALLY'),
+])
+def test_cross_case_evidence_gate_rejects(row_kwargs, candidate_kwargs, reason):
+    row = cross_case_row(candidate=_candidate('case:D', **candidate_kwargs), **row_kwargs)
+    ledger = _cross_case_ledger(audit=[row], audit_cases=_CROSS_CASE_CASES,
+                                case_keys=_CROSS_CASE_KEYS)
+    assert not ledger.completion_records
+    assert ledger.append_plan == ()
+    record, = ledger.unresolved_records
+    assert record['reason'] == reason
+    assert record['completion_status'] == 'UNRESOLVED'
+    assert record['confidence_class'] == 'NONE'
+    assert record['rule_id'] == 'COHORT_TAXONOMY_V1'
+    assert record['source_entity_type'] == 'SWITCH'
+    assert record['source_record_ref'] == 'zip-member:data/ref/03_Switch.csv#data-row=1'
+
+
+def test_cross_case_referring_case_hard_blocker_rejects():
+    cases = [case_inventory('case:A', hard_blockers=['HB-1']), case_inventory('case:D')]
+    ledger = _cross_case_ledger(audit=[cross_case_row()], audit_cases=cases,
+                                case_keys=_CROSS_CASE_KEYS)
+    assert not ledger.completion_records
+    assert ledger.append_plan == ()
+    record, = ledger.unresolved_records
+    assert record['reason'] == 'REFERRING_CASE_HARD_BLOCKER'
+
+
+def test_cross_case_donor_case_hard_blocker_rejects():
+    cases = [case_inventory('case:A'), case_inventory('case:D', hard_blockers=['HB-1'])]
+    ledger = _cross_case_ledger(audit=[cross_case_row()], audit_cases=cases,
+                                case_keys=_CROSS_CASE_KEYS)
+    assert not ledger.completion_records
+    assert ledger.append_plan == ()
+    record, = ledger.unresolved_records
+    assert record['reason'] == 'DONOR_CASE_HARD_BLOCKER'
+
+
+def test_cross_case_tier_gate_is_not_materialized():
+    row = cross_case_row(candidate=_candidate('case:D', station_relationship='CROSS_STATION'))
+    ledger = _cross_case_ledger(audit=[row], audit_cases=_CROSS_CASE_CASES,
+                                case_keys=_CROSS_CASE_KEYS)
+    assert not ledger.completion_records
+    assert ledger.append_plan == ()
+    record, = ledger.unresolved_records
+    assert record['reason'] == 'TIER_NOT_MATERIALIZED'
+    assert record['tier'] == 'CROSS_STATION'
+
+
+def test_cross_case_matched_row_is_proposed_with_unique_evidence():
+    ledger = _cross_case_ledger(audit=[cross_case_row()], audit_cases=_CROSS_CASE_CASES,
+                                case_keys=_CROSS_CASE_KEYS)
+    assert not ledger.unresolved_records
+    record, = ledger.completion_records
+    assert record['completion_status'] == 'PROPOSED'
+    assert record['confidence_class'] == 'UNIQUE_EVIDENCE'
+    assert record['tier'] == 'SAME_STATION'
+    assert record['rule_id'] == 'CROSS_CASE_REFERENCE_COPY_V1'
+    assert record['rule_version'] == '1.1.0'
+    assert record['closure_depth'] == 0
+    assert record['reason'] is None
+    assert record['source_case_key'] == 'dir/a'
+    assert record['source_entity_type'] == 'SWITCH'
+    assert record['donor_source_entity_type'] == 'SWITCH'
+    assert record['donor_source_record_ref'] == 'zip-member:data/donor/03_Switch.csv#data-row=1'
+    assert record['raw_field'] == 'Switch_ToBus'
+    assert record['raw_reference_value'] == 'B-DONOR-2'
+    assert record['evidence_refs'] == ['audit:index:1', 'audit:ref:1']
+    entry, = ledger.append_plan
+    assert entry['destination_member'] == 'dir/a/03_Switch.csv'
+    assert entry['donor_source_record_ref'] == 'zip-member:data/donor/03_Switch.csv#data-row=1'
+    assert entry['source_record_ref'] == 'zip-member:data/ref/03_Switch.csv#data-row=1'
+    assert entry['record_ids'] == (record['record_id'],)
+    assert ledger.counts['addition_count'] == 1
+    assert ledger.counts['appended_row_count'] == 1
+
+
+def test_cross_case_deduplicates_the_plan_but_not_the_records():
+    row1 = cross_case_row(reference_id='audit:ref:1',
+                          source_record_ref='zip-member:data/ref/03_Switch.csv#data-row=1')
+    row2 = cross_case_row(reference_id='audit:ref:2',
+                          source_record_ref='zip-member:data/ref/03_Switch.csv#data-row=2')
+    ledger = _cross_case_ledger(audit=[row1, row2], audit_cases=_CROSS_CASE_CASES,
+                                case_keys=_CROSS_CASE_KEYS)
+    assert len(ledger.completion_records) == 2
+    entry, = ledger.append_plan
+    assert entry['record_ids'] == tuple(sorted(r['record_id'] for r in ledger.completion_records))
+    assert len(entry['record_ids']) == 2
+    # The collapsed referring source_record_ref is the lexicographically smallest one.
+    assert entry['source_record_ref'] == 'zip-member:data/ref/03_Switch.csv#data-row=1'
+    assert ledger.counts['addition_count'] == 2
+    assert ledger.counts['appended_row_count'] == 1
+    assert ledger.counts['addition_count'] != ledger.counts['appended_row_count']
+
+
+def test_cross_case_plan_order_is_independent_of_input_order():
+    def build(rows):
+        return _cross_case_ledger(audit=rows, audit_cases=_CROSS_CASE_CASES,
+                                  case_keys=_CROSS_CASE_KEYS)
+
+    row_a = cross_case_row(case='case:A', reference_id='audit:ref:a')
+    row_b = cross_case_row(case='case:B', reference_id='audit:ref:b')
+    forward = build([row_a, row_b])
+    backward = build([row_b, row_a])
+    assert forward.append_plan == backward.append_plan
+    assert [e['destination_member'] for e in forward.append_plan] == [
+        'dir/a/03_Switch.csv', 'dir/b/03_Switch.csv']
+
+
+def test_cross_case_with_an_unknown_case_fails_loudly():
+    with pytest.raises(ValueError, match='unknown case'):
+        _cross_case_ledger(audit=[cross_case_row(case='case:Z')],
+                           audit_cases=[case_inventory('case:Z'), case_inventory('case:D')],
+                           case_keys={'case:D': 'dir/d'})
+
+
+def test_cross_case_is_gated_by_the_policy():
+    from grid_case_generator.models.completion_export import CompletionPolicy
+    policy = CompletionPolicy(policy_version='1.0.0', materialize_tiers=('SAME_STATION',),
+                              enabled_rules=('ACCEPTED_DETERMINISTIC_RECOVERY_V1',),
+                              max_reference_closure_depth=2, placement_endpoint_bus=True)
+    ledger = build_ledger(cohort_inputs(
+        audit=[cross_case_row()], audit_cases=_CROSS_CASE_CASES,
+        case_keys=_CROSS_CASE_KEYS, policy=policy))
+    assert not ledger.completion_records
+    assert not ledger.unresolved_records
+    assert ledger.append_plan == ()
